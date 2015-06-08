@@ -1,0 +1,74 @@
+buildscript {
+  repositories {
+    mavenCentral()
+  }
+}
+
+task wrapper(type: Wrapper) {
+  gradleVersion = "2.0"
+}
+
+repositories {
+  mavenCentral()
+}
+
+apply plugin: "idea"
+apply plugin: "java"
+
+dependencies {
+  compile "org.jetbrains:annotations:13.0"
+  compile "org.eclipse.jgit:org.eclipse.jgit:3.6.2.201501210735-r"
+  compile "org.slf4j:slf4j-simple:1.7.7"
+  compile "com.beust:jcommander:1.35"
+}
+
+sourceCompatibility = JavaVersion.VERSION_1_8
+
+idea {
+  project {
+    jdkName = sourceCompatibility.name
+    languageLevel = sourceCompatibility.name
+  }
+  module {
+    jdkName = sourceCompatibility.name
+    downloadJavadoc = true
+    downloadSources = true
+  }
+}
+
+tasks.withType(JavaCompile) {
+  options.encoding = "UTF-8"
+}
+
+jar {
+  manifest {
+    attributes(
+        "Main-Class": "git.lfs.migrate.Main",
+        "Class-Path": "${-> createLauncherClassPath()}"
+    )
+  }
+}
+
+task deployJars(dependsOn: jar) << {
+  def projectArtifacts = configurations.archives.artifacts*.file
+  def fullArtifacts = configurations.archives.artifacts*.file + configurations.runtime.files
+  copy {
+    from fullArtifacts.intersect(projectArtifacts)
+    into "${project.buildDir}/deploy"
+  }
+  copy {
+    from fullArtifacts.minus(projectArtifacts)
+    into "${project.buildDir}/deploy/vendors"
+  }
+}
+
+task deployZip(type: Zip, dependsOn: deployJars) {
+  from "build/deploy"
+}
+
+def createLauncherClassPath() {
+  def projectArtifacts = configurations.archives.artifacts*.file
+  def fullArtifacts = configurations.archives.artifacts*.file + configurations.runtime.files
+  def vendorJars = fullArtifacts.minus(projectArtifacts).collect { "vendors/${it.name}" }
+  return vendorJars.join(" ")
+}

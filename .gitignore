@@ -1,0 +1,25 @@
+*.class
+*.local
+
+# Mobile Tools for Java (J2ME)
+.mtj.tmp/
+
+# Package Files #
+*.jar
+*.war
+*.ear
+
+# Idea
+*.iml
+.idea
+
+# Gradle
+.gradle
+build
+
+# Virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
+hs_err_pid*
+
+# Local run
+example.git
+*.mapdb*
