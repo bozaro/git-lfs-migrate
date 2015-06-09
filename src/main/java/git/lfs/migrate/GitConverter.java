@@ -1,6 +1,10 @@
 package git.lfs.migrate;
 
 import com.beust.jcommander.internal.Nullable;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.google.gson.stream.JsonWriter;
 import org.apache.commons.codec.binary.Hex;
 import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.revwalk.*;
@@ -8,6 +12,7 @@ import org.eclipse.jgit.treewalk.CanonicalTreeParser;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.*;
+import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -193,6 +198,8 @@ public class GitConverter {
           }
         }
         String hash = new String(Hex.encodeHex(md.digest(), true));
+        // Upload file.
+        upload(hash, loader.getSize(), tmpFile);
         // Rename file.
         final File lfsFile = new File(dstRepo.getDirectory(), "lfs/objects/" + hash.substring(0, 2) + "/" + hash.substring(2, 4) + "/" + hash);
         lfsFile.getParentFile().mkdirs();
@@ -217,6 +224,58 @@ public class GitConverter {
         return ObjectId.zeroId();
       }
     });
+  }
+
+  private void upload(@NotNull String hash, long size, @NotNull File file) throws IOException {
+    if (lfs == null) {
+      return;
+    }
+
+    HttpURLConnection conn = (HttpURLConnection) new URL(lfs, "objects").openConnection();
+    conn.setRequestMethod("POST");
+    conn.addRequestProperty("Accept", "application/vnd.git-lfs+json");
+    if (lfs.getUserInfo() != null) {
+      conn.addRequestProperty("Authorization", "Basic " + Base64.getEncoder().encodeToString(lfs.getUserInfo().getBytes(StandardCharsets.UTF_8)));
+    }
+    conn.addRequestProperty("Content-Type", "application/vnd.git-lfs+json");
+
+    conn.setDoOutput(true);
+    try (Writer writer = new OutputStreamWriter(conn.getOutputStream(), StandardCharsets.UTF_8)) {
+      JsonWriter json = new JsonWriter(writer);
+      json.beginObject();
+      json.name("oid").value(hash);
+      json.name("size").value(size);
+      json.endObject();
+    }
+    if (conn.getResponseCode() == 200) {
+      // Already uploaded.
+      return;
+    }
+
+    final JsonObject upload;
+    try (Reader reader = new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8)) {
+      JsonElement json = new JsonParser().parse(reader);
+      upload = json.getAsJsonObject().get("_links").getAsJsonObject().get("upload").getAsJsonObject();
+    }
+
+    // Upload data.
+    conn = (HttpURLConnection) new URL(upload.get("href").getAsString()).openConnection();
+    conn.setRequestMethod("PUT");
+    for (Map.Entry<String, JsonElement> header : upload.get("header").getAsJsonObject().entrySet()) {
+      conn.addRequestProperty(header.getKey(), header.getValue().getAsString());
+    }
+    conn.setDoOutput(true);
+    conn.setFixedLengthStreamingMode(size);
+    try (OutputStream ostream = conn.getOutputStream();
+         InputStream istream = new FileInputStream(file)) {
+      byte[] buffer = new byte[0x10000];
+      while (true) {
+        int len = istream.read(buffer);
+        if (len <= 0) break;
+        ostream.write(buffer, 0, len);
+      }
+    }
+    conn.getInputStream().close();
   }
 
   @NotNull

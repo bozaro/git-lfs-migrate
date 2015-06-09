@@ -43,7 +43,7 @@ public class Main {
       jc.usage();
       return;
     }
-    processRepository(cmd.src, cmd.dst, cmd.lfs, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
+    processRepository(cmd.src, cmd.dst, cmd.lfs != null ? new URL(cmd.lfs) : null, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
   }
 
   public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @Nullable URL lfs, @NotNull String... suffixes) throws IOException {
@@ -186,7 +186,7 @@ public class Main {
     private File dst;
     @Parameter(names = {"-l", "--lfs"}, description = "LFS URL", required = false)
     @Nullable
-    private URL lfs;
+    private String lfs;
 
     @Parameter(description = "LFS file suffixes")
     @NotNull

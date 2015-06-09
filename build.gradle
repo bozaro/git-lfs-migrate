@@ -21,6 +21,7 @@ dependencies {
   compile "org.slf4j:slf4j-simple:1.7.7"
   compile "org.jgrapht:jgrapht-core:0.9.1"
   compile "com.beust:jcommander:1.35"
+  compile "com.google.code.gson:gson:2.3.1"
 }
 
 sourceCompatibility = JavaVersion.VERSION_1_8
