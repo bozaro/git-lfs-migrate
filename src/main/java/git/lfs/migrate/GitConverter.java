@@ -1,15 +1,18 @@
 package git.lfs.migrate;
 
 import com.beust.jcommander.internal.Nullable;
+import org.apache.commons.codec.binary.Hex;
 import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.revwalk.*;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.*;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
-import java.util.function.Function;
 
 /**
  * Converter for git objects.
@@ -26,17 +29,25 @@ public class GitConverter {
   private final RevWalk revWalk;
   @NotNull
   private final Map<String, ObjectId> converted = new HashMap<>();
+  @Nullable
+  private final URL lfs;
   @NotNull
   private final String[] suffixes;
   @NotNull
+  private final File tmpDir;
+  @NotNull
   private final ObjectInserter inserter;
 
-  public GitConverter(@NotNull Repository srcRepo, @NotNull Repository dstRepo, @NotNull String... suffixes) {
+  public GitConverter(@NotNull Repository srcRepo, @NotNull Repository dstRepo, @Nullable URL lfs, @NotNull String[] suffixes) {
     this.srcRepo = srcRepo;
     this.dstRepo = dstRepo;
     this.revWalk = new RevWalk(srcRepo);
     this.inserter = dstRepo.newObjectInserter();
     this.suffixes = suffixes.clone();
+    this.lfs = lfs;
+
+    tmpDir = new File(dstRepo.getDirectory(), "lfs/tmp");
+    tmpDir.mkdirs();
   }
 
   @NotNull
@@ -165,16 +176,45 @@ public class GitConverter {
 
   @NotNull
   private ObjectId convertLFS(@Nullable ObjectId id) throws IOException {
-    return converted.computeIfAbsent("lfs:" + id.getName(), new Function<String, ObjectId>() {
-      @Override
-      public ObjectId apply(String s) {
-        try {
-          // todo: Доделать.
-          return copy(id);
-        } catch (IOException e) {
-          rethrow(e);
-          return ObjectId.zeroId();
+    return converted.computeIfAbsent("lfs:" + id.getName(), s -> {
+      try {
+        final MessageDigest md = MessageDigest.getInstance("SHA-256");
+        // Create LFS stream.
+        final File tmpFile = new File(tmpDir, id.getName());
+        final ObjectLoader loader = srcRepo.open(id, Constants.OBJ_BLOB);
+        try (InputStream istream = loader.openStream();
+             OutputStream ostream = new FileOutputStream(tmpFile)) {
+          byte[] buffer = new byte[0x10000];
+          while (true) {
+            int size = istream.read(buffer);
+            if (size <= 0) break;
+            ostream.write(buffer, 0, size);
+            md.update(buffer, 0, size);
+          }
         }
+        String hash = new String(Hex.encodeHex(md.digest(), true));
+        // Rename file.
+        final File lfsFile = new File(dstRepo.getDirectory(), "lfs/objects/" + hash.substring(0, 2) + "/" + hash.substring(2, 4) + "/" + hash);
+        lfsFile.getParentFile().mkdirs();
+        if (lfsFile.exists()) {
+          tmpFile.delete();
+        } else if (!tmpFile.renameTo(lfsFile)) {
+          throw new IOException("Can't rename file: " + tmpFile + " -> " + lfsFile);
+        }
+        // Create pointer.
+        StringWriter pointer = new StringWriter();
+        pointer.write("version https://git-lfs.github.com/spec/v1\n");
+        pointer.write("oid sha256:" + hash + "\n");
+        pointer.write("size " + loader.getSize() + "\n");
+        pointer.write("\n");
+
+        return inserter.insert(Constants.OBJ_BLOB, pointer.toString().getBytes(StandardCharsets.UTF_8));
+      } catch (IOException e) {
+        rethrow(e);
+        return ObjectId.zeroId();
+      } catch (NoSuchAlgorithmException e) {
+        rethrow(e);
+        return ObjectId.zeroId();
       }
     });
   }

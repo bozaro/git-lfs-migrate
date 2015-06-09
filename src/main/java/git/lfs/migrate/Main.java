@@ -2,6 +2,7 @@ package git.lfs.migrate;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
+import com.beust.jcommander.internal.Nullable;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.RefUpdate;
@@ -17,6 +18,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URL;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -41,10 +43,10 @@ public class Main {
       jc.usage();
       return;
     }
-    processRepository(cmd.src, cmd.dst, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
+    processRepository(cmd.src, cmd.dst, cmd.lfs, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
   }
 
-  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @NotNull String... suffixes) throws IOException {
+  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @Nullable URL lfs, @NotNull String... suffixes) throws IOException {
     removeDirectory(dstPath);
     dstPath.mkdirs();
 
@@ -61,7 +63,7 @@ public class Main {
       final List<ObjectId> revisions = loadCommitList(srcRepo);
       log.info("Found revisions: {}", revisions.size());
       int i = 0;
-      GitConverter converter = new GitConverter(srcRepo, dstRepo, suffixes);
+      GitConverter converter = new GitConverter(srcRepo, dstRepo, lfs, suffixes);
       for (ObjectId revision : revisions) {
         i += 1;
         ObjectId newId = converter.convert(revision);
@@ -182,6 +184,9 @@ public class Main {
     @Parameter(names = {"-d", "--destination"}, description = "Destination repository", required = true)
     @NotNull
     private File dst;
+    @Parameter(names = {"-l", "--lfs"}, description = "LFS URL", required = false)
+    @Nullable
+    private URL lfs;
 
     @Parameter(description = "LFS file suffixes")
     @NotNull
