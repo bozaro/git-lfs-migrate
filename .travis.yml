@@ -1,0 +1,19 @@
+language: java
+sudo: false
+jdk:
+- oraclejdk8
+install:
+- gradle assemble
+script:
+- gradle check
+before_deploy:
+- gradle deployZip
+deploy:
+  provider: releases
+  api-key:
+    secure: o0K0OtHpZE2J+DTDxg1KxKb2yE8ub2f5KJ/S1V+XFdBVkpzWM3GaJTUgB30eZC+ofK+f3twoss5754hmrSP9OZbABZ9hAteKlIbFradYlZTBVAGOfzlmnQn37SCeRVV//8QKMRuZRMf0HXDruE2EKUpsnH0W2HjhLpLebiu/wQHdW2rsIMwfYcYtjiZzzhMmk37sfLQ0aKN2hqkitSR9lK7tiqrYfNZPnawPEe4rdfbRe2CV5rq8TkoQeiFKfCPQtXirWl+XcFf4lBgk2f1JY8plRZknVsmSu3KJqTkJzqBsJfXsVvYJE870LaLB7kKJI/e4qiMpcCnTP5fXN0NtHFQAHPjAGG/CgkLI1P/uSV/oB2u1bzDIIZqDRHIbIbKz4AfNR2n4wcEdPzDvvigjLI5LyyH07uwqxCrknT10ECdabSrONJnMBp8Vsr+/rWETjQ85ALYpUUPlPwdTGa/pFtRm+iVBtr9AIbKUMBuniJzp76XIEPZfczwJCTJz9VSm1pwlQgQdlbF7tmsRIc79Hzxh6Yu6VcyPCUqjY7v3yC4xrw9zY7AI2Kj1GGDu1x6p9JZuxXIFMkwmzq5cGLgbBJnH+bUjH/I+yg1o9rSIxPzH/ASus/P2CxO4XtGWt8q1sK8SfRpNv4yWHL4il3GzYPHtFVpP6xmwJGkiuF+FEBo=
+  file: build/distributions/git-lfs-migrate.zip
+  skip_cleanup: true
+  on:
+    tags: true
+    all_branches: true
