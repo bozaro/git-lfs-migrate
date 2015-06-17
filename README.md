@@ -14,7 +14,7 @@ For quick run you need:
  * Download binaries archive from: https://github.com/bozaro/git-lfs-migrate/releases/latest
  * After unpacking archive you can run server executing:<br/>
    ```
-java -jar build/deploy/git-lfs-migrate.jar -s source-repo.git -d target-repo.git -l http://test:test@lfs-server/
+java -jar build/deploy/git-lfs-migrate.jar -s source-repo.git -d target-repo.git -l http://test:test@lfs-server/ .psd .zip .bin
 ```
 
 ## Build from sources
@@ -32,5 +32,5 @@ For Windows:
 When build completes you can convert repository executing:
 
 ```
-java -jar build/deploy/git-lfs-migrate.jar -s source-repo.git -d target-repo.git -l http://test:test@lfs-server/
+java -jar build/deploy/git-lfs-migrate.jar -s source-repo.git -d target-repo.git -l http://test:test@lfs-server/ .psd .zip .bin
 ```
