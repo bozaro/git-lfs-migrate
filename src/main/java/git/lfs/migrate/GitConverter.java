@@ -213,7 +213,6 @@ public class GitConverter {
         pointer.write("version https://git-lfs.github.com/spec/v1\n");
         pointer.write("oid sha256:" + hash + "\n");
         pointer.write("size " + loader.getSize() + "\n");
-        pointer.write("\n");
 
         return inserter.insert(Constants.OBJ_BLOB, pointer.toString().getBytes(StandardCharsets.UTF_8));
       } catch (IOException e) {
