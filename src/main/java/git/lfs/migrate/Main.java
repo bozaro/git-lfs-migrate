@@ -72,8 +72,11 @@ public class Main {
       }
       for (Map.Entry<String, Ref> ref : srcRepo.getAllRefs().entrySet()) {
         RefUpdate refUpdate = dstRepo.updateRef(ref.getKey());
-        refUpdate.setNewObjectId(converter.convert(ref.getValue().getObjectId()));
+        final ObjectId oldId = ref.getValue().getObjectId();
+        final ObjectId newId = converter.convert(oldId);
+        refUpdate.setNewObjectId(newId);
         refUpdate.update();
+        log.info("  convert ref: {} -> {} ({})", oldId.getName(), newId.getName(), ref.getKey());
       }
     } finally {
       dstRepo.close();

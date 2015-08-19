@@ -72,6 +72,9 @@ public class GitConverter {
         if (revObject instanceof RevBlob) {
           return copy(id);
         }
+        if (revObject instanceof RevTag) {
+          return convertTag((RevTag) revObject);
+        }
         throw new IllegalStateException("Unsupported object type: " + id.getName() + " (" + revObject.getClass().getName() + ")");
       } catch (IOException e) {
         rethrow(e);
@@ -92,6 +95,17 @@ public class GitConverter {
       }
     }
     new EvilThrower<RuntimeException>().sneakyThrow(exception);
+  }
+
+  @NotNull
+  private ObjectId convertTag(@NotNull RevTag revObject) throws IOException {
+    final ObjectId id = convert(revObject.getObject());
+    final TagBuilder builder = new TagBuilder();
+    builder.setMessage(revObject.getFullMessage());
+    builder.setTag(revObject.getTagName());
+    builder.setTagger(revObject.getTaggerIdent());
+    builder.setObjectId(id, revObject.getObject().getType());
+    return inserter.insert(builder);
   }
 
   @NotNull
@@ -152,7 +166,7 @@ public class GitConverter {
       entries.add(new GitTreeEntry(fileMode, blobId, treeParser.getEntryPathString()));
       treeParser.next();
     }
-    if (needAttributes) {
+    if (needAttributes && suffixes.length > 0) {
       entries.add(new GitTreeEntry(FileMode.REGULAR_FILE, createAttributes(null), GIT_ATTRIBUTES));
       modified = true;
     }
