@@ -43,7 +43,9 @@ public class Main {
       jc.usage();
       return;
     }
+    final long time = System.currentTimeMillis();
     processRepository(cmd.src, cmd.dst, cmd.lfs != null ? new URL(cmd.lfs) : null, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
+    log.info("Convert time: {}", System.currentTimeMillis() - time);
   }
 
   public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @Nullable URL lfs, @NotNull String... suffixes) throws IOException {
