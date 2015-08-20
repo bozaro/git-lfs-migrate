@@ -22,6 +22,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -109,14 +110,16 @@ public class Main {
     graph.removeAllVertices(queue);
     final ExecutorService pool = Executors.newFixedThreadPool(threads);
     try (ProgressReporter reporter = new ProgressReporter("completed", queue.size())) {
+      final AtomicBoolean done = new AtomicBoolean(false);
       final List<Future<?>> jobs = new ArrayList<>(threads);
       for (int i = 0; i < threads; ++i) {
         jobs.add(pool.submit(() -> {
           try {
             final ObjectInserter inserter = dstRepo.newObjectInserter();
             final ObjectReader reader = srcRepo.newObjectReader();
-            while (!queue.isEmpty()) {
+            while (!done.get()) {
               final TaskKey taskKey = queue.poll();
+              if (taskKey == null) break;
               final ObjectId objectId = converter.convertTask(reader, taskKey).convert(inserter, converted::get);
               converted.put(taskKey, objectId);
               reporter.increment();
@@ -124,6 +127,8 @@ public class Main {
             inserter.flush();
           } catch (IOException e) {
             rethrow(e);
+          } finally {
+            done.set(true);
           }
         }));
       }
