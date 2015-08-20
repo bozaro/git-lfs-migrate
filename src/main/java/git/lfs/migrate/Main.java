@@ -3,10 +3,7 @@ package git.lfs.migrate;
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.internal.Nullable;
-import org.eclipse.jgit.lib.ObjectId;
-import org.eclipse.jgit.lib.Ref;
-import org.eclipse.jgit.lib.RefUpdate;
-import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 import org.jetbrains.annotations.NotNull;
 import org.jgrapht.graph.DefaultEdge;
@@ -23,6 +20,7 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
+import java.util.concurrent.*;
 
 /**
  * Entry point.
@@ -42,11 +40,11 @@ public class Main {
       return;
     }
     final long time = System.currentTimeMillis();
-    processRepository(cmd.src, cmd.dst, cmd.lfs != null ? new URL(cmd.lfs) : null, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
+    processRepository(cmd.src, cmd.dst, cmd.lfs != null ? new URL(cmd.lfs) : null, cmd.threads, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
     log.info("Convert time: {}", System.currentTimeMillis() - time);
   }
 
-  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @Nullable URL lfs, @NotNull String... suffixes) throws IOException {
+  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @Nullable URL lfs, int threads, @NotNull String... suffixes) throws IOException, InterruptedException {
     removeDirectory(dstPath);
     dstPath.mkdirs();
 
@@ -56,7 +54,7 @@ public class Main {
     final Repository dstRepo = new FileRepositoryBuilder()
         .setMustExist(false)
         .setGitDir(dstPath).build();
-    final GitConverter converter = new GitConverter(srcRepo, dstRepo, lfs, suffixes);
+    final GitConverter converter = new GitConverter(srcRepo, dstPath, lfs, suffixes);
     try {
       dstRepo.create(true);
       // Load all revision list.
@@ -65,36 +63,19 @@ public class Main {
       final int totalObjects = graph.vertexSet().size();
       log.info("Found objects: {}", totalObjects);
 
-      log.info("Converting...", totalObjects);
-      final Deque<TaskKey> queue = new ArrayDeque<>();
-      for (TaskKey vertex : graph.vertexSet()) {
-        if (graph.outgoingEdgesOf(vertex).isEmpty()) {
-          queue.add(vertex);
-        }
-      }
-      final Map<TaskKey, ObjectId> converted = new HashMap<>();
-      while (!queue.isEmpty()) {
-        final TaskKey taskKey = queue.pop();
-        final ObjectId objectId = converter.convertTask(taskKey).convert(converted::get);
-        converted.put(taskKey, objectId);
+      final ConcurrentMap<TaskKey, ObjectId> converted = new ConcurrentHashMap<>();
+      log.info("Converting object without dependencies in " + threads + " threads...", totalObjects);
+      processMultipleThreads(converter, graph, dstRepo, converted, threads);
 
-        final List<TaskKey> sources = new ArrayList<>();
-        for (DefaultEdge edge : graph.incomingEdgesOf(taskKey)) {
-          sources.add(graph.getEdgeSource(edge));
-        }
+      log.info("Converting graph in single thread...");
+      processSingleThread(converter, graph, dstRepo, converted);
 
-        graph.removeVertex(taskKey);
-        for (TaskKey source : sources) {
-          if (graph.outgoingEdgesOf(source).isEmpty()) {
-            queue.add(source);
-          }
-        }
-      }
+      // Validate result
       if (converted.size() != totalObjects) {
         throw new IllegalStateException();
       }
 
-      log.info("Recreating refs...", totalObjects);
+      log.info("Recreating refs...");
       for (Map.Entry<String, Ref> ref : srcRepo.getAllRefs().entrySet()) {
         RefUpdate refUpdate = dstRepo.updateRef(ref.getKey());
         final ObjectId oldId = ref.getValue().getObjectId();
@@ -107,6 +88,68 @@ public class Main {
       dstRepo.close();
       srcRepo.close();
     }
+  }
+
+  private static void processMultipleThreads(@NotNull GitConverter converter, @NotNull SimpleDirectedGraph<TaskKey, DefaultEdge> graph, Repository dstRepo, @NotNull ConcurrentMap<TaskKey, ObjectId> converted, int threads) throws IOException, InterruptedException {
+    final Deque<TaskKey> queue = new ConcurrentLinkedDeque<>();
+    for (TaskKey vertex : graph.vertexSet()) {
+      if (graph.outgoingEdgesOf(vertex).isEmpty()) {
+        queue.add(vertex);
+      }
+    }
+    graph.removeAllVertices(queue);
+    final ExecutorService pool = Executors.newFixedThreadPool(threads);
+    final List<Future<?>> jobs = new ArrayList<>(threads);
+    for (int i = 0; i < threads; ++i) {
+      jobs.add(pool.submit(() -> {
+        try {
+          final ObjectInserter inserter = dstRepo.newObjectInserter();
+          while (!queue.isEmpty()) {
+            final TaskKey taskKey = queue.poll();
+            final ObjectId objectId = converter.convertTask(taskKey).convert(inserter, converted::get);
+            converted.put(taskKey, objectId);
+          }
+          inserter.flush();
+        } catch (IOException e) {
+          rethrow(e);
+        }
+      }));
+    }
+    for (Future<?> job : jobs) {
+      try {
+        job.get();
+      } catch (ExecutionException e) {
+        rethrow(e.getCause());
+      }
+    }
+  }
+
+  private static void processSingleThread(@NotNull GitConverter converter, @NotNull SimpleDirectedGraph<TaskKey, DefaultEdge> graph, Repository dstRepo, @NotNull Map<TaskKey, ObjectId> converted) throws IOException {
+    final Deque<TaskKey> queue = new ArrayDeque<>();
+    for (TaskKey vertex : graph.vertexSet()) {
+      if (graph.outgoingEdgesOf(vertex).isEmpty()) {
+        queue.add(vertex);
+      }
+    }
+    final ObjectInserter inserter = dstRepo.newObjectInserter();
+    while (!queue.isEmpty()) {
+      final TaskKey taskKey = queue.pop();
+      final ObjectId objectId = converter.convertTask(taskKey).convert(inserter, converted::get);
+      converted.put(taskKey, objectId);
+
+      final List<TaskKey> sources = new ArrayList<>();
+      for (DefaultEdge edge : graph.incomingEdgesOf(taskKey)) {
+        sources.add(graph.getEdgeSource(edge));
+      }
+
+      graph.removeVertex(taskKey);
+      for (TaskKey source : sources) {
+        if (graph.outgoingEdgesOf(source).isEmpty()) {
+          queue.add(source);
+        }
+      }
+    }
+    inserter.flush();
   }
 
   private static void removeDirectory(@NotNull File path) throws IOException {
@@ -150,6 +193,16 @@ public class Main {
     return graph;
   }
 
+  public static void rethrow(final Throwable exception) {
+    class EvilThrower<T extends Throwable> {
+      @SuppressWarnings("unchecked")
+      private void sneakyThrow(Throwable exception) throws T {
+        throw (T) exception;
+      }
+    }
+    new EvilThrower<RuntimeException>().sneakyThrow(exception);
+  }
+
   public static class CmdArgs {
     @Parameter(names = {"-s", "--source"}, description = "Source repository", required = true)
     @NotNull
@@ -160,6 +213,8 @@ public class Main {
     @Parameter(names = {"-l", "--lfs"}, description = "LFS URL", required = false)
     @Nullable
     private String lfs;
+    @Parameter(names = {"-t", "--threads"}, description = "Thread count", required = false)
+    private int threads = Runtime.getRuntime().availableProcessors();
 
     @Parameter(description = "LFS file suffixes")
     @NotNull

@@ -29,28 +29,24 @@ public class GitConverter {
   @NotNull
   private final Repository srcRepo;
   @NotNull
-  private final Repository dstRepo;
-  @NotNull
   private final RevWalk revWalk;
   @Nullable
   private final URL lfs;
   @NotNull
   private final String[] suffixes;
   @NotNull
-  private final File tmpDir;
-  @NotNull
-  private final ObjectInserter inserter;
+  private final File basePath;
+  private final File tempPath;
 
-  public GitConverter(@NotNull Repository srcRepo, @NotNull Repository dstRepo, @Nullable URL lfs, @NotNull String[] suffixes) {
+  public GitConverter(@NotNull Repository srcRepo, @NotNull File basePath, @Nullable URL lfs, @NotNull String[] suffixes) {
     this.srcRepo = srcRepo;
-    this.dstRepo = dstRepo;
+    this.basePath = basePath;
     this.revWalk = new RevWalk(srcRepo);
-    this.inserter = dstRepo.newObjectInserter();
     this.suffixes = suffixes.clone();
     this.lfs = lfs;
 
-    tmpDir = new File(dstRepo.getDirectory(), "lfs/tmp");
-    tmpDir.mkdirs();
+    tempPath = new File(basePath, "lfs/tmp");
+    tempPath.mkdirs();
   }
 
   @NotNull
@@ -88,10 +84,6 @@ public class GitConverter {
     }
   }
 
-  public void flush() throws IOException {
-    inserter.flush();
-  }
-
   @NotNull
   private ConvertTask convertTagTask(@NotNull RevTag revObject) throws IOException {
     return new ConvertTask() {
@@ -105,7 +97,7 @@ public class GitConverter {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ConvertResolver resolver) throws IOException {
+      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
         final ObjectId id = resolver.resolve(TaskType.Simple, revObject.getObject());
         final TagBuilder builder = new TagBuilder();
         builder.setMessage(revObject.getFullMessage());
@@ -133,7 +125,7 @@ public class GitConverter {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ConvertResolver resolver) throws IOException {
+      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
         final CommitBuilder builder = new CommitBuilder();
         builder.setAuthor(revObject.getAuthorIdent());
         builder.setCommitter(revObject.getCommitterIdent());
@@ -190,7 +182,7 @@ public class GitConverter {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ConvertResolver resolver) throws IOException {
+      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
         final List<GitTreeEntry> entries = getEntries();
         // Create new tree.
         Collections.sort(entries);
@@ -224,7 +216,7 @@ public class GitConverter {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ConvertResolver resolver) throws IOException {
+      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
         final MessageDigest md;
         try {
           md = MessageDigest.getInstance("SHA-256");
@@ -232,7 +224,7 @@ public class GitConverter {
           throw new IllegalStateException(e);
         }
         // Create LFS stream.
-        final File tmpFile = new File(tmpDir, id.getName());
+        final File tmpFile = new File(tempPath, id.getName());
         final ObjectLoader loader = srcRepo.open(id, Constants.OBJ_BLOB);
         try (InputStream istream = loader.openStream();
              OutputStream ostream = new FileOutputStream(tmpFile)) {
@@ -248,7 +240,7 @@ public class GitConverter {
         // Upload file.
         upload(hash, loader.getSize(), tmpFile);
         // Rename file.
-        final File lfsFile = new File(dstRepo.getDirectory(), "lfs/objects/" + hash.substring(0, 2) + "/" + hash.substring(2, 4) + "/" + hash);
+        final File lfsFile = new File(basePath, "lfs/objects/" + hash.substring(0, 2) + "/" + hash.substring(2, 4) + "/" + hash);
         lfsFile.getParentFile().mkdirs();
         if (lfsFile.exists()) {
           tmpFile.delete();
@@ -329,7 +321,7 @@ public class GitConverter {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ConvertResolver resolver) throws IOException {
+      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
         final Set<String> attributes = new TreeSet<>();
         for (String suffix : suffixes) {
           attributes.add("*" + suffix + "\tfilter=lfs diff=lfs merge=lfs -crlf");
@@ -364,12 +356,10 @@ public class GitConverter {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ConvertResolver resolver) throws IOException {
-        if (!dstRepo.hasObject(id)) {
-          ObjectLoader loader = srcRepo.open(id);
-          try (ObjectStream stream = loader.openStream()) {
-            inserter.insert(loader.getType(), loader.getSize(), stream);
-          }
+      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
+        final ObjectLoader loader = srcRepo.open(id);
+        try (ObjectStream stream = loader.openStream()) {
+          inserter.insert(loader.getType(), loader.getSize(), stream);
         }
         return id;
       }
@@ -403,7 +393,7 @@ public class GitConverter {
     Iterable<TaskKey> depends() throws IOException;
 
     @NotNull
-    ObjectId convert(@NotNull ConvertResolver resolver) throws IOException;
+    ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException;
   }
 
 }
