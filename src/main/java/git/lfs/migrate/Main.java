@@ -21,6 +21,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Entry point.
@@ -99,57 +100,65 @@ public class Main {
     }
     graph.removeAllVertices(queue);
     final ExecutorService pool = Executors.newFixedThreadPool(threads);
-    final List<Future<?>> jobs = new ArrayList<>(threads);
-    for (int i = 0; i < threads; ++i) {
-      jobs.add(pool.submit(() -> {
-        try {
-          final ObjectInserter inserter = dstRepo.newObjectInserter();
-          while (!queue.isEmpty()) {
-            final TaskKey taskKey = queue.poll();
-            final ObjectId objectId = converter.convertTask(taskKey).convert(inserter, converted::get);
-            converted.put(taskKey, objectId);
+    try (ProgressReporter reporter = new ProgressReporter("completed", queue.size())) {
+      final List<Future<?>> jobs = new ArrayList<>(threads);
+      for (int i = 0; i < threads; ++i) {
+        jobs.add(pool.submit(() -> {
+          try {
+            final ObjectInserter inserter = dstRepo.newObjectInserter();
+            while (!queue.isEmpty()) {
+              final TaskKey taskKey = queue.poll();
+              final ObjectId objectId = converter.convertTask(taskKey).convert(inserter, converted::get);
+              converted.put(taskKey, objectId);
+              reporter.increment();
+            }
+            inserter.flush();
+          } catch (IOException e) {
+            rethrow(e);
           }
-          inserter.flush();
-        } catch (IOException e) {
-          rethrow(e);
-        }
-      }));
-    }
-    for (Future<?> job : jobs) {
-      try {
-        job.get();
-      } catch (ExecutionException e) {
-        rethrow(e.getCause());
+        }));
       }
+      for (Future<?> job : jobs) {
+        try {
+          job.get();
+        } catch (ExecutionException e) {
+          rethrow(e.getCause());
+        }
+      }
+    } finally {
+      pool.shutdown();
     }
   }
 
   private static void processSingleThread(@NotNull GitConverter converter, @NotNull SimpleDirectedGraph<TaskKey, DefaultEdge> graph, Repository dstRepo, @NotNull Map<TaskKey, ObjectId> converted) throws IOException {
-    final Deque<TaskKey> queue = new ArrayDeque<>();
-    for (TaskKey vertex : graph.vertexSet()) {
-      if (graph.outgoingEdgesOf(vertex).isEmpty()) {
-        queue.add(vertex);
-      }
-    }
-    final ObjectInserter inserter = dstRepo.newObjectInserter();
-    while (!queue.isEmpty()) {
-      final TaskKey taskKey = queue.pop();
-      final ObjectId objectId = converter.convertTask(taskKey).convert(inserter, converted::get);
-      converted.put(taskKey, objectId);
-
-      final List<TaskKey> sources = new ArrayList<>();
-      for (DefaultEdge edge : graph.incomingEdgesOf(taskKey)) {
-        sources.add(graph.getEdgeSource(edge));
-      }
-
-      graph.removeVertex(taskKey);
-      for (TaskKey source : sources) {
-        if (graph.outgoingEdgesOf(source).isEmpty()) {
-          queue.add(source);
+    try (ProgressReporter reporter = new ProgressReporter("completed", graph.vertexSet().size())) {
+      final Deque<TaskKey> queue = new ArrayDeque<>();
+      for (TaskKey vertex : graph.vertexSet()) {
+        if (graph.outgoingEdgesOf(vertex).isEmpty()) {
+          queue.add(vertex);
         }
       }
+      final ObjectInserter inserter = dstRepo.newObjectInserter();
+      while (!queue.isEmpty()) {
+        final TaskKey taskKey = queue.pop();
+        final ObjectId objectId = converter.convertTask(taskKey).convert(inserter, converted::get);
+        converted.put(taskKey, objectId);
+
+        final List<TaskKey> sources = new ArrayList<>();
+        for (DefaultEdge edge : graph.incomingEdgesOf(taskKey)) {
+          sources.add(graph.getEdgeSource(edge));
+        }
+
+        graph.removeVertex(taskKey);
+        for (TaskKey source : sources) {
+          if (graph.outgoingEdgesOf(source).isEmpty()) {
+            queue.add(source);
+          }
+        }
+        reporter.increment();
+      }
+      inserter.flush();
     }
-    inserter.flush();
   }
 
   private static void removeDirectory(@NotNull File path) throws IOException {
@@ -171,26 +180,30 @@ public class Main {
   }
 
   private static SimpleDirectedGraph<TaskKey, DefaultEdge> loadTaskGraph(@NotNull GitConverter converter, @NotNull Repository repository) throws IOException {
-    final Map<String, Ref> refs = repository.getAllRefs();
-    final SimpleDirectedGraph<TaskKey, DefaultEdge> graph = new SimpleDirectedGraph<>(DefaultEdge.class);
-    // Heads
-    final Deque<TaskKey> queue = new ArrayDeque<>();
-    for (Ref ref : refs.values()) {
-      final TaskKey taskKey = new TaskKey(GitConverter.TaskType.Simple, ref.getObjectId());
-      if (graph.addVertex(taskKey)) {
-        queue.add(taskKey);
-      }
-    }
-    while (!queue.isEmpty()) {
-      final TaskKey taskKey = queue.pop();
-      for (TaskKey depend : converter.convertTask(taskKey).depends()) {
-        if (graph.addVertex(depend)) {
-          queue.add(depend);
+    try (ProgressReporter reporter = new ProgressReporter("found", -1)) {
+      final Map<String, Ref> refs = repository.getAllRefs();
+      final SimpleDirectedGraph<TaskKey, DefaultEdge> graph = new SimpleDirectedGraph<>(DefaultEdge.class);
+      final Deque<TaskKey> queue = new ArrayDeque<>();
+      // Heads
+      for (Ref ref : refs.values()) {
+        final TaskKey taskKey = new TaskKey(GitConverter.TaskType.Simple, ref.getObjectId());
+        if (graph.addVertex(taskKey)) {
+          queue.add(taskKey);
+          reporter.increment();
         }
-        graph.addEdge(taskKey, depend);
       }
+      while (!queue.isEmpty()) {
+        final TaskKey taskKey = queue.pop();
+        for (TaskKey depend : converter.convertTask(taskKey).depends()) {
+          if (graph.addVertex(depend)) {
+            queue.add(depend);
+            reporter.increment();
+          }
+          graph.addEdge(taskKey, depend);
+        }
+      }
+      return graph;
     }
-    return graph;
   }
 
   public static void rethrow(final Throwable exception) {
@@ -201,6 +214,43 @@ public class Main {
       }
     }
     new EvilThrower<RuntimeException>().sneakyThrow(exception);
+  }
+
+  public static class ProgressReporter implements AutoCloseable {
+    private static final long DELAY = TimeUnit.SECONDS.toMillis(1);
+    private final long total;
+    @NotNull
+    private final AtomicLong current = new AtomicLong(0);
+    @NotNull
+    private final AtomicLong lastTime = new AtomicLong(0);
+    @NotNull
+    private final String prefix;
+
+    public ProgressReporter(@NotNull String prefix, long total) {
+      this.prefix = prefix;
+      this.total = total;
+    }
+
+    public void increment() {
+      final long last = current.incrementAndGet();
+      final long oldTime = lastTime.get();
+      final long newTime = System.currentTimeMillis();
+      if (oldTime < newTime - DELAY) {
+        if (lastTime.compareAndSet(oldTime, newTime)) {
+          print(last);
+        }
+      }
+    }
+
+    @Override
+    public void close() {
+      print(current.get());
+    }
+
+    private void print(long current) {
+      log.info("  " + prefix + ": " + current + (total >= 0 ? "/" + total : ""));
+    }
+
   }
 
   public static class CmdArgs {
