@@ -7,8 +7,6 @@ import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.RefUpdate;
 import org.eclipse.jgit.lib.Repository;
-import org.eclipse.jgit.revwalk.RevCommit;
-import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 import org.jetbrains.annotations.NotNull;
 import org.jgrapht.graph.DefaultEdge;
@@ -52,30 +50,55 @@ public class Main {
     removeDirectory(dstPath);
     dstPath.mkdirs();
 
-    Repository srcRepo = new FileRepositoryBuilder()
+    final Repository srcRepo = new FileRepositoryBuilder()
         .setMustExist(true)
         .setGitDir(srcPath).build();
-    Repository dstRepo = new FileRepositoryBuilder()
+    final Repository dstRepo = new FileRepositoryBuilder()
         .setMustExist(false)
         .setGitDir(dstPath).build();
+    final GitConverter converter = new GitConverter(srcRepo, dstRepo, lfs, suffixes);
     try {
       dstRepo.create(true);
       // Load all revision list.
-      log.info("Reading full revisions list...");
-      final List<ObjectId> revisions = loadCommitList(srcRepo);
-      log.info("Found revisions: {}", revisions.size());
-      int i = 0;
-      GitConverter converter = new GitConverter(srcRepo, dstRepo, lfs, suffixes);
-      for (ObjectId revision : revisions) {
-        i += 1;
-        ObjectId newId = converter.convert(revision);
-        converter.flush();
-        log.info("  convert revision: {} -> {} ({}/{})", revision.getName(), newId.getName(), i, revisions.size());
+      log.info("Reading full objects list...");
+      final SimpleDirectedGraph<TaskKey, DefaultEdge> graph = loadTaskGraph(converter, srcRepo);
+      final int totalObjects = graph.vertexSet().size();
+      log.info("Found objects: {}", totalObjects);
+
+      log.info("Converting...", totalObjects);
+      final Deque<TaskKey> queue = new ArrayDeque<>();
+      for (TaskKey vertex : graph.vertexSet()) {
+        if (graph.outgoingEdgesOf(vertex).isEmpty()) {
+          queue.add(vertex);
+        }
       }
+      final Map<TaskKey, ObjectId> converted = new HashMap<>();
+      while (!queue.isEmpty()) {
+        final TaskKey taskKey = queue.pop();
+        final ObjectId objectId = converter.convertTask(taskKey).convert(converted::get);
+        converted.put(taskKey, objectId);
+
+        final List<TaskKey> sources = new ArrayList<>();
+        for (DefaultEdge edge : graph.incomingEdgesOf(taskKey)) {
+          sources.add(graph.getEdgeSource(edge));
+        }
+
+        graph.removeVertex(taskKey);
+        for (TaskKey source : sources) {
+          if (graph.outgoingEdgesOf(source).isEmpty()) {
+            queue.add(source);
+          }
+        }
+      }
+      if (converted.size() != totalObjects) {
+        throw new IllegalStateException();
+      }
+
+      log.info("Recreating refs...", totalObjects);
       for (Map.Entry<String, Ref> ref : srcRepo.getAllRefs().entrySet()) {
         RefUpdate refUpdate = dstRepo.updateRef(ref.getKey());
         final ObjectId oldId = ref.getValue().getObjectId();
-        final ObjectId newId = converter.convert(oldId);
+        final ObjectId newId = converted.get(new TaskKey(GitConverter.TaskType.Simple, oldId));
         refUpdate.setNewObjectId(newId);
         refUpdate.update();
         log.info("  convert ref: {} -> {} ({})", oldId.getName(), newId.getName(), ref.getKey());
@@ -104,82 +127,27 @@ public class Main {
     }
   }
 
-  private static List<ObjectId> loadCommitList(@NotNull Repository repository) throws IOException {
+  private static SimpleDirectedGraph<TaskKey, DefaultEdge> loadTaskGraph(@NotNull GitConverter converter, @NotNull Repository repository) throws IOException {
     final Map<String, Ref> refs = repository.getAllRefs();
-    final SimpleDirectedGraph<ObjectId, DefaultEdge> commitGraph = new SimpleDirectedGraph<>(DefaultEdge.class);
+    final SimpleDirectedGraph<TaskKey, DefaultEdge> graph = new SimpleDirectedGraph<>(DefaultEdge.class);
     // Heads
-    final Set<ObjectId> heads = new HashSet<>();
+    final Deque<TaskKey> queue = new ArrayDeque<>();
     for (Ref ref : refs.values()) {
-      if (commitGraph.addVertex(ref.getObjectId())) {
-        heads.add(ref.getObjectId());
+      final TaskKey taskKey = new TaskKey(GitConverter.TaskType.Simple, ref.getObjectId());
+      if (graph.addVertex(taskKey)) {
+        queue.add(taskKey);
       }
     }
-    // Relations
-    {
-      final Queue<ObjectId> queue = new ArrayDeque<>();
-      queue.addAll(heads);
-      final RevWalk revWalk = new RevWalk(repository);
-      while (true) {
-        final ObjectId id = queue.poll();
-        if (id == null) {
-          break;
+    while (!queue.isEmpty()) {
+      final TaskKey taskKey = queue.pop();
+      for (TaskKey depend : converter.convertTask(taskKey).depends()) {
+        if (graph.addVertex(depend)) {
+          queue.add(depend);
         }
-        final RevCommit commit = revWalk.parseCommit(id);
-        if (commit != null) {
-          for (RevCommit parent : commit.getParents()) {
-            if (commitGraph.addVertex(parent.getId())) {
-              queue.add(parent.getId());
-            }
-            commitGraph.addEdge(id, parent.getId());
-          }
-        }
+        graph.addEdge(taskKey, depend);
       }
     }
-    // Create revisions list
-    final List<ObjectId> result = new ArrayList<>();
-    {
-      final Deque<ObjectId> queue = new ArrayDeque<>();
-      // Heads
-      for (ObjectId id : heads) {
-        if (commitGraph.incomingEdgesOf(id).isEmpty()) {
-          queue.push(id);
-        }
-      }
-      while (!queue.isEmpty()) {
-        final ObjectId id = queue.pop();
-        if (!commitGraph.containsVertex(id)) {
-          continue;
-        }
-        final Set<DefaultEdge> edges = commitGraph.outgoingEdgesOf(id);
-        if (!edges.isEmpty()) {
-          queue.push(id);
-          for (DefaultEdge edge : edges) {
-            queue.push(commitGraph.getEdgeTarget(edge));
-          }
-          commitGraph.removeAllEdges(new HashSet<>(edges));
-        } else {
-          commitGraph.removeVertex(id);
-          result.add(id);
-        }
-      }
-    }
-    // Validate list.
-    {
-      final RevWalk revWalk = new RevWalk(repository);
-      final Set<ObjectId> competed = new HashSet<>();
-      for (ObjectId id : result) {
-        final RevCommit commit = revWalk.parseCommit(id);
-        if (commit != null) {
-          for (RevCommit parent : commit.getParents()) {
-            if (!competed.contains(parent.getId())) {
-              throw new IllegalStateException();
-            }
-          }
-        }
-        competed.add(id);
-      }
-    }
-    return result;
+    return graph;
   }
 
   public static class CmdArgs {

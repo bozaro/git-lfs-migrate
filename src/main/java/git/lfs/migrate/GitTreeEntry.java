@@ -1,9 +1,7 @@
 package git.lfs.migrate;
 
 import org.eclipse.jgit.lib.FileMode;
-import org.eclipse.jgit.lib.ObjectId;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 
 /**
  * Git tree entry.
@@ -14,19 +12,14 @@ public final class GitTreeEntry implements Comparable<GitTreeEntry> {
   @NotNull
   private final FileMode fileMode;
   @NotNull
-  private final ObjectId objectId;
+  private final TaskKey taskKey;
   @NotNull
   private final String fileName;
 
-  public GitTreeEntry(@NotNull FileMode fileMode, @NotNull ObjectId objectId, @NotNull String fileName) {
+  public GitTreeEntry(@NotNull FileMode fileMode, @NotNull TaskKey taskKey, @NotNull String fileName) {
     this.fileMode = fileMode;
-    this.objectId = objectId;
+    this.taskKey = taskKey;
     this.fileName = fileName;
-  }
-
-  @NotNull
-  public String getId() {
-    return objectId.getName();
   }
 
   @NotNull
@@ -40,8 +33,8 @@ public final class GitTreeEntry implements Comparable<GitTreeEntry> {
   }
 
   @NotNull
-  public ObjectId getObjectId() {
-    return objectId;
+  public TaskKey getTaskKey() {
+    return taskKey;
   }
 
   @Override
@@ -74,21 +67,23 @@ public final class GitTreeEntry implements Comparable<GitTreeEntry> {
   }
 
   @Override
-  public boolean equals(@Nullable Object o) {
+  public boolean equals(Object o) {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
 
     GitTreeEntry that = (GitTreeEntry) o;
 
-    return objectId.equals(that.objectId)
-        && fileMode.equals(that.fileMode)
-        && fileName.equals(that.fileName);
+    if (!fileMode.equals(that.fileMode)) return false;
+    if (!taskKey.equals(that.taskKey)) return false;
+    if (!fileName.equals(that.fileName)) return false;
+
+    return true;
   }
 
   @Override
   public int hashCode() {
     int result = fileMode.hashCode();
-    result = 31 * result + objectId.hashCode();
+    result = 31 * result + taskKey.hashCode();
     result = 31 * result + fileName.hashCode();
     return result;
   }
@@ -97,7 +92,7 @@ public final class GitTreeEntry implements Comparable<GitTreeEntry> {
   public String toString() {
     return "GitTreeEntry{" +
         "fileMode=" + fileMode +
-        ", objectId=" + objectId +
+        ", taskKey=" + taskKey +
         ", fileName='" + fileName + '\'' +
         '}';
   }
