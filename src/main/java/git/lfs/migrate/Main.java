@@ -55,7 +55,7 @@ public class Main {
     final Repository dstRepo = new FileRepositoryBuilder()
         .setMustExist(false)
         .setGitDir(dstPath).build();
-    final GitConverter converter = new GitConverter(srcRepo, dstPath, lfs, suffixes);
+    final GitConverter converter = new GitConverter(dstPath, lfs, suffixes);
     try {
       dstRepo.create(true);
       // Load all revision list.
@@ -66,10 +66,10 @@ public class Main {
 
       final ConcurrentMap<TaskKey, ObjectId> converted = new ConcurrentHashMap<>();
       log.info("Converting object without dependencies in " + threads + " threads...", totalObjects);
-      processMultipleThreads(converter, graph, dstRepo, converted, threads);
+      processMultipleThreads(converter, graph, srcRepo, dstRepo, converted, threads);
 
       log.info("Converting graph in single thread...");
-      processSingleThread(converter, graph, dstRepo, converted);
+      processSingleThread(converter, graph, srcRepo, dstRepo, converted);
 
       // Validate result
       if (converted.size() != totalObjects) {
@@ -91,7 +91,7 @@ public class Main {
     }
   }
 
-  private static void processMultipleThreads(@NotNull GitConverter converter, @NotNull SimpleDirectedGraph<TaskKey, DefaultEdge> graph, Repository dstRepo, @NotNull ConcurrentMap<TaskKey, ObjectId> converted, int threads) throws IOException, InterruptedException {
+  private static void processMultipleThreads(@NotNull GitConverter converter, @NotNull SimpleDirectedGraph<TaskKey, DefaultEdge> graph, @NotNull Repository srcRepo, @NotNull Repository dstRepo, @NotNull ConcurrentMap<TaskKey, ObjectId> converted, int threads) throws IOException, InterruptedException {
     final Deque<TaskKey> queue = new ConcurrentLinkedDeque<>();
     for (TaskKey vertex : graph.vertexSet()) {
       if (graph.outgoingEdgesOf(vertex).isEmpty()) {
@@ -106,9 +106,10 @@ public class Main {
         jobs.add(pool.submit(() -> {
           try {
             final ObjectInserter inserter = dstRepo.newObjectInserter();
+            final ObjectReader reader = srcRepo.newObjectReader();
             while (!queue.isEmpty()) {
               final TaskKey taskKey = queue.poll();
-              final ObjectId objectId = converter.convertTask(taskKey).convert(inserter, converted::get);
+              final ObjectId objectId = converter.convertTask(reader, taskKey).convert(inserter, converted::get);
               converted.put(taskKey, objectId);
               reporter.increment();
             }
@@ -130,7 +131,7 @@ public class Main {
     }
   }
 
-  private static void processSingleThread(@NotNull GitConverter converter, @NotNull SimpleDirectedGraph<TaskKey, DefaultEdge> graph, Repository dstRepo, @NotNull Map<TaskKey, ObjectId> converted) throws IOException {
+  private static void processSingleThread(@NotNull GitConverter converter, @NotNull SimpleDirectedGraph<TaskKey, DefaultEdge> graph, @NotNull Repository srcRepo, @NotNull Repository dstRepo, @NotNull Map<TaskKey, ObjectId> converted) throws IOException {
     try (ProgressReporter reporter = new ProgressReporter("completed", graph.vertexSet().size())) {
       final Deque<TaskKey> queue = new ArrayDeque<>();
       for (TaskKey vertex : graph.vertexSet()) {
@@ -139,9 +140,10 @@ public class Main {
         }
       }
       final ObjectInserter inserter = dstRepo.newObjectInserter();
+      final ObjectReader reader = srcRepo.newObjectReader();
       while (!queue.isEmpty()) {
         final TaskKey taskKey = queue.pop();
-        final ObjectId objectId = converter.convertTask(taskKey).convert(inserter, converted::get);
+        final ObjectId objectId = converter.convertTask(reader, taskKey).convert(inserter, converted::get);
         converted.put(taskKey, objectId);
 
         final List<TaskKey> sources = new ArrayList<>();
@@ -192,9 +194,10 @@ public class Main {
           reporter.increment();
         }
       }
+      final ObjectReader reader = repository.newObjectReader();
       while (!queue.isEmpty()) {
         final TaskKey taskKey = queue.pop();
-        for (TaskKey depend : converter.convertTask(taskKey).depends()) {
+        for (TaskKey depend : converter.convertTask(reader, taskKey).depends()) {
           if (graph.addVertex(depend)) {
             queue.add(depend);
             reporter.increment();

@@ -26,10 +26,6 @@ import java.util.*;
 public class GitConverter {
   @NotNull
   private static final String GIT_ATTRIBUTES = ".gitattributes";
-  @NotNull
-  private final Repository srcRepo;
-  @NotNull
-  private final RevWalk revWalk;
   @Nullable
   private final URL lfs;
   @NotNull
@@ -38,10 +34,8 @@ public class GitConverter {
   private final File basePath;
   private final File tempPath;
 
-  public GitConverter(@NotNull Repository srcRepo, @NotNull File basePath, @Nullable URL lfs, @NotNull String[] suffixes) {
-    this.srcRepo = srcRepo;
+  public GitConverter(@NotNull File basePath, @Nullable URL lfs, @NotNull String[] suffixes) {
     this.basePath = basePath;
-    this.revWalk = new RevWalk(srcRepo);
     this.suffixes = suffixes.clone();
     this.lfs = lfs;
 
@@ -50,18 +44,21 @@ public class GitConverter {
   }
 
   @NotNull
-  public ConvertTask convertTask(@NotNull TaskKey key) throws IOException {
+  public ConvertTask convertTask(@NotNull ObjectReader reader, @NotNull TaskKey key) throws IOException {
     switch (key.getType()) {
       case Simple: {
-        final RevObject revObject = revWalk.parseAny(key.getObjectId());
+        if (!reader.has(key.getObjectId())) {
+          return keepMissingTask(key.getObjectId());
+        }
+        final RevObject revObject = new RevWalk(reader).parseAny(key.getObjectId());
         if (revObject instanceof RevCommit) {
           return convertCommitTask((RevCommit) revObject);
         }
         if (revObject instanceof RevTree) {
-          return convertTreeTask(revObject, false);
+          return convertTreeTask(reader, revObject, false);
         }
         if (revObject instanceof RevBlob) {
-          return copyTask(revObject);
+          return copyTask(reader, revObject);
         }
         if (revObject instanceof RevTag) {
           return convertTagTask((RevTag) revObject);
@@ -69,19 +66,35 @@ public class GitConverter {
         throw new IllegalStateException("Unsupported object type: " + key + " (" + revObject.getClass().getName() + ")");
       }
       case Root: {
-        final RevObject revObject = revWalk.parseAny(key.getObjectId());
+        final RevObject revObject = new RevWalk(reader).parseAny(key.getObjectId());
         if (revObject instanceof RevTree) {
-          return convertTreeTask(revObject, true);
+          return convertTreeTask(reader, revObject, true);
         }
         throw new IllegalStateException("Unsupported object type: " + key + " (" + revObject.getClass().getName() + ")");
       }
       case Attribute:
-        return createAttributesTask(key.getObjectId());
+        return createAttributesTask(reader, key.getObjectId());
       case UploadLfs:
-        return convertLfsTask(key.getObjectId());
+        return convertLfsTask(reader, key.getObjectId());
       default:
         throw new IllegalStateException("Unknwon task key type: " + key.getType());
     }
+  }
+
+  private ConvertTask keepMissingTask(@NotNull ObjectId objectId) {
+    return new ConvertTask() {
+      @NotNull
+      @Override
+      public Iterable<TaskKey> depends() throws IOException {
+        return Collections.emptyList();
+      }
+
+      @NotNull
+      @Override
+      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
+        return objectId;
+      }
+    };
   }
 
   @NotNull
@@ -143,12 +156,12 @@ public class GitConverter {
   }
 
   @NotNull
-  private ConvertTask convertTreeTask(@NotNull ObjectId id, boolean rootTree) {
+  private ConvertTask convertTreeTask(@NotNull ObjectReader reader, @NotNull ObjectId id, boolean rootTree) {
     return new ConvertTask() {
       @NotNull
       private List<GitTreeEntry> getEntries() throws IOException {
         final List<GitTreeEntry> entries = new ArrayList<>();
-        final CanonicalTreeParser treeParser = new CanonicalTreeParser(null, srcRepo.newObjectReader(), id);
+        final CanonicalTreeParser treeParser = new CanonicalTreeParser(null, reader, id);
         boolean needAttributes = rootTree;
         while (!treeParser.eof()) {
           final FileMode fileMode = treeParser.getEntryFileMode();
@@ -206,7 +219,7 @@ public class GitConverter {
   }
 
   @NotNull
-  private ConvertTask convertLfsTask(@Nullable ObjectId id) throws IOException {
+  private ConvertTask convertLfsTask(@NotNull ObjectReader reader, @Nullable ObjectId id) throws IOException {
     return new ConvertTask() {
       @NotNull
       @Override
@@ -225,7 +238,7 @@ public class GitConverter {
         }
         // Create LFS stream.
         final File tmpFile = new File(tempPath, id.getName());
-        final ObjectLoader loader = srcRepo.open(id, Constants.OBJ_BLOB);
+        final ObjectLoader loader = reader.open(id, Constants.OBJ_BLOB);
         try (InputStream istream = loader.openStream();
              OutputStream ostream = new FileOutputStream(tmpFile)) {
           byte[] buffer = new byte[0x10000];
@@ -311,7 +324,7 @@ public class GitConverter {
   }
 
   @NotNull
-  private ConvertTask createAttributesTask(@Nullable ObjectId id) throws IOException {
+  private ConvertTask createAttributesTask(@NotNull final ObjectReader reader, @Nullable ObjectId id) throws IOException {
     return new ConvertTask() {
       @NotNull
       @Override
@@ -327,9 +340,9 @@ public class GitConverter {
           attributes.add("*" + suffix + "\tfilter=lfs diff=lfs merge=lfs -crlf");
         }
         final ByteArrayOutputStream blob = new ByteArrayOutputStream();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(openAttributes(id), StandardCharsets.UTF_8))) {
+        try (BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(openAttributes(reader, id), StandardCharsets.UTF_8))) {
           while (true) {
-            String line = reader.readLine();
+            String line = bufferedReader.readLine();
             if (line == null) break;
             if (!attributes.remove(line)) {
               blob.write(line.getBytes(StandardCharsets.UTF_8));
@@ -346,7 +359,7 @@ public class GitConverter {
     };
   }
 
-  private ConvertTask copyTask(@NotNull ObjectId id) throws IOException {
+  private ConvertTask copyTask(@NotNull ObjectReader reader, @NotNull ObjectId id) throws IOException {
     return new ConvertTask() {
       @NotNull
       @Override
@@ -357,7 +370,7 @@ public class GitConverter {
       @NotNull
       @Override
       public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
-        final ObjectLoader loader = srcRepo.open(id);
+        final ObjectLoader loader = reader.open(id);
         try (ObjectStream stream = loader.openStream()) {
           inserter.insert(loader.getType(), loader.getSize(), stream);
         }
@@ -367,11 +380,11 @@ public class GitConverter {
   }
 
   @NotNull
-  private InputStream openAttributes(@Nullable ObjectId id) throws IOException {
+  private InputStream openAttributes(@NotNull ObjectReader reader, @Nullable ObjectId id) throws IOException {
     if (ObjectId.zeroId().equals(id)) {
       return new ByteArrayInputStream(new byte[0]);
     }
-    return srcRepo.open(id, Constants.OBJ_BLOB).openStream();
+    return reader.open(id, Constants.OBJ_BLOB).openStream();
   }
 
   public enum TaskType {
