@@ -2,10 +2,10 @@ package git.lfs.migrate;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
-import com.beust.jcommander.internal.Nullable;
 import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.jgrapht.graph.DefaultEdge;
 import org.jgrapht.graph.SimpleDirectedGraph;
 import org.slf4j.Logger;
@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -41,8 +42,15 @@ public class Main {
       return;
     }
     final long time = System.currentTimeMillis();
-    processRepository(cmd.src, cmd.dst, cmd.lfs != null ? new URL(cmd.lfs) : null, cmd.threads, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
+    processRepository(cmd.src, cmd.dst, prepareUrl(cmd.lfs), cmd.threads, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
     log.info("Convert time: {}", System.currentTimeMillis() - time);
+  }
+
+  @Nullable
+  private static URL prepareUrl(@Nullable String url) throws MalformedURLException {
+    if (url == null) return null;
+    if (url.endsWith("/")) return new URL(url);
+    return new URL(url + "/");
   }
 
   public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @Nullable URL lfs, int threads, @NotNull String... suffixes) throws IOException, InterruptedException {
