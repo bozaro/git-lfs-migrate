@@ -6,6 +6,20 @@ Simple project for convert old repository for using git-lfs feature.
 
 # How to use
 
+## How to get LFS server URL
+
+You can get correct LFS server URL by command like:
+
+```
+ssh git@github.com git-lfs-authenticate bozaro/git-lfs-migrate upload
+```
+
+For GitHub LFS server URL looks like:
+
+```
+https://bozaro:*****@api.github.com/lfs/bozaro/git-lfs-migrate
+```
+
 ## Run from binaries
 
 For quick run you need:
