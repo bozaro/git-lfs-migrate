@@ -8,7 +8,7 @@ import com.google.gson.stream.JsonWriter;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.httpclient.HttpClient;
 import org.apache.commons.httpclient.HttpStatus;
-import org.apache.commons.httpclient.methods.FileRequestEntity;
+import org.apache.commons.httpclient.methods.InputStreamRequestEntity;
 import org.apache.commons.httpclient.methods.PostMethod;
 import org.apache.commons.httpclient.methods.PutMethod;
 import org.apache.commons.httpclient.methods.StringRequestEntity;
@@ -255,8 +255,6 @@ public class GitConverter {
           }
         }
         String hash = new String(Hex.encodeHex(md.digest(), true));
-        // Upload file.
-        upload(hash, loader.getSize(), tmpFile);
         // Rename file.
         final File lfsFile = new File(basePath, "lfs/objects/" + hash.substring(0, 2) + "/" + hash.substring(2, 4) + "/" + hash);
         lfsFile.getParentFile().mkdirs();
@@ -265,6 +263,8 @@ public class GitConverter {
         } else if (!tmpFile.renameTo(lfsFile)) {
           throw new IOException("Can't rename file: " + tmpFile + " -> " + lfsFile);
         }
+        // Upload file.
+        checkAndUpload(loader, hash);
         // Create pointer.
         StringWriter pointer = new StringWriter();
         pointer.write("version https://git-lfs.github.com/spec/v1\n");
@@ -276,7 +276,7 @@ public class GitConverter {
     };
   }
 
-  private void upload(@NotNull String hash, long size, @NotNull File file) throws IOException {
+  private void checkAndUpload(@NotNull ObjectLoader loader, @NotNull String hash) throws IOException {
     if (lfs == null) {
       return;
     }
@@ -292,7 +292,7 @@ public class GitConverter {
       JsonWriter json = new JsonWriter(writer);
       json.beginObject();
       json.name("oid").value(hash);
-      json.name("size").value(size);
+      json.name("size").value(loader.getSize());
       json.endObject();
       post.setRequestEntity(new StringRequestEntity(writer.toString(), "application/vnd.git-lfs+json", "UTF-8"));
     }
@@ -314,13 +314,26 @@ public class GitConverter {
 
     // Upload data.
     PutMethod put = new PutMethod(upload.get("href").getAsString());
-    for (Map.Entry<String, JsonElement> header : upload.get("header").getAsJsonObject().entrySet()) {
-      put.addRequestHeader(header.getKey(), header.getValue().getAsString());
+    Map<String, String> header = new HashMap<>();
+    for (Map.Entry<String, JsonElement> entry : upload.get("header").getAsJsonObject().entrySet()) {
+      header.put(entry.getKey(), entry.getValue().getAsString());
     }
-    put.setRequestEntity(new FileRequestEntity(file, "application/octet-stream"));
-    final int putStatus = client.executeMethod(put);
-    if (putStatus != HttpStatus.SC_OK) {
-      throw new HttpError(post, "I can't upload object " + hash);
+    upload(loader, hash, upload.get("href").getAsString(), header);
+  }
+
+  private void upload(@NotNull ObjectLoader loader, @NotNull String hash, @NotNull String href, @NotNull Map<String, String> header) throws IOException {
+    // Upload data.
+    PutMethod put = new PutMethod(href);
+    for (Map.Entry<String, String> entry : header.entrySet()) {
+      put.addRequestHeader(entry.getKey(), entry.getValue());
+    }
+    HttpClient client = new HttpClient();
+    try (InputStream stream = loader.openStream()) {
+      put.setRequestEntity(new InputStreamRequestEntity(stream, loader.getSize(), "application/octet-stream"));
+      final int putStatus = client.executeMethod(put);
+      if (putStatus != HttpStatus.SC_OK) {
+        throw new HttpError(put, "I can't upload object " + hash);
+      }
     }
   }
 
