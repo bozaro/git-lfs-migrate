@@ -6,13 +6,18 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.stream.JsonWriter;
 import org.apache.commons.codec.binary.Hex;
+import org.apache.commons.httpclient.HttpClient;
+import org.apache.commons.httpclient.HttpStatus;
+import org.apache.commons.httpclient.methods.FileRequestEntity;
+import org.apache.commons.httpclient.methods.PostMethod;
+import org.apache.commons.httpclient.methods.PutMethod;
+import org.apache.commons.httpclient.methods.StringRequestEntity;
 import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.revwalk.*;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.*;
-import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -276,51 +281,47 @@ public class GitConverter {
       return;
     }
 
-    HttpURLConnection conn = (HttpURLConnection) new URL(lfs, "objects").openConnection();
-    conn.setRequestMethod("POST");
-    conn.addRequestProperty("Accept", "application/vnd.git-lfs+json");
+    HttpClient client = new HttpClient();
+    PostMethod post = new PostMethod(new URL(lfs, "objects").toString());
+    post.addRequestHeader("Accept", "application/vnd.git-lfs+json");
     if (lfs.getUserInfo() != null) {
-      conn.addRequestProperty("Authorization", "Basic " + Base64.getEncoder().encodeToString(lfs.getUserInfo().getBytes(StandardCharsets.UTF_8)));
+      post.addRequestHeader("Authorization", "Basic " + Base64.getEncoder().encodeToString(lfs.getUserInfo().getBytes(StandardCharsets.UTF_8)));
     }
-    conn.addRequestProperty("Content-Type", "application/vnd.git-lfs+json");
 
-    conn.setDoOutput(true);
-    try (Writer writer = new OutputStreamWriter(conn.getOutputStream(), StandardCharsets.UTF_8)) {
+    try (StringWriter writer = new StringWriter()) {
       JsonWriter json = new JsonWriter(writer);
       json.beginObject();
       json.name("oid").value(hash);
       json.name("size").value(size);
       json.endObject();
+      post.setRequestEntity(new StringRequestEntity(writer.toString(), "application/vnd.git-lfs+json", "UTF-8"));
     }
-    if (conn.getResponseCode() == 200) {
+
+    final int postStatus = client.executeMethod(post);
+    if (postStatus == HttpStatus.SC_OK) {
       // Already uploaded.
       return;
     }
+    if (postStatus != HttpStatus.SC_ACCEPTED) {
+      throw new HttpError(post, "I can't get details for object " + hash + " uploading");
+    }
 
     final JsonObject upload;
-    try (Reader reader = new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8)) {
+    try (Reader reader = new InputStreamReader(post.getResponseBodyAsStream(), StandardCharsets.UTF_8)) {
       JsonElement json = new JsonParser().parse(reader);
       upload = json.getAsJsonObject().get("_links").getAsJsonObject().get("upload").getAsJsonObject();
     }
 
     // Upload data.
-    conn = (HttpURLConnection) new URL(upload.get("href").getAsString()).openConnection();
-    conn.setRequestMethod("PUT");
+    PutMethod put = new PutMethod(upload.get("href").getAsString());
     for (Map.Entry<String, JsonElement> header : upload.get("header").getAsJsonObject().entrySet()) {
-      conn.addRequestProperty(header.getKey(), header.getValue().getAsString());
+      put.addRequestHeader(header.getKey(), header.getValue().getAsString());
     }
-    conn.setDoOutput(true);
-    conn.setFixedLengthStreamingMode(size);
-    try (OutputStream ostream = conn.getOutputStream();
-         InputStream istream = new FileInputStream(file)) {
-      byte[] buffer = new byte[0x10000];
-      while (true) {
-        int len = istream.read(buffer);
-        if (len <= 0) break;
-        ostream.write(buffer, 0, len);
-      }
+    put.setRequestEntity(new FileRequestEntity(file, "application/octet-stream"));
+    final int putStatus = client.executeMethod(put);
+    if (putStatus != HttpStatus.SC_OK) {
+      throw new HttpError(post, "I can't upload object " + hash);
     }
-    conn.getInputStream().close();
   }
 
   @NotNull
