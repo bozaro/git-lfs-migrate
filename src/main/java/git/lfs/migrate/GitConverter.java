@@ -31,6 +31,7 @@ import java.util.*;
 public class GitConverter {
   @NotNull
   private static final String GIT_ATTRIBUTES = ".gitattributes";
+  private static final int PASS_COUNT = 3;
   @Nullable
   private final URL lfs;
   @NotNull
@@ -264,7 +265,7 @@ public class GitConverter {
           throw new IOException("Can't rename file: " + tmpFile + " -> " + lfsFile);
         }
         // Upload file.
-        checkAndUpload(loader, hash);
+        reply(() -> checkAndUpload(loader, hash));
         // Create pointer.
         StringWriter pointer = new StringWriter();
         pointer.write("version https://git-lfs.github.com/spec/v1\n");
@@ -313,12 +314,22 @@ public class GitConverter {
     }
 
     // Upload data.
-    PutMethod put = new PutMethod(upload.get("href").getAsString());
-    Map<String, String> header = new HashMap<>();
+    final Map<String, String> header = new HashMap<>();
     for (Map.Entry<String, JsonElement> entry : upload.get("header").getAsJsonObject().entrySet()) {
       header.put(entry.getKey(), entry.getValue().getAsString());
     }
-    upload(loader, hash, upload.get("href").getAsString(), header);
+    reply(() -> upload(loader, hash, upload.get("href").getAsString(), header));
+  }
+
+  private void reply(@NotNull UploadTask href) throws IOException {
+    for (int pass = 0; pass < PASS_COUNT - 1; ++pass) {
+      try {
+        href.exec();
+        return;
+      } catch (IOException ignored) {
+      }
+    }
+    href.exec();
   }
 
   private void upload(@NotNull ObjectLoader loader, @NotNull String hash, @NotNull String href, @NotNull Map<String, String> header) throws IOException {
@@ -403,6 +414,11 @@ public class GitConverter {
 
   public enum TaskType {
     Simple, Root, Attribute, UploadLfs,
+  }
+
+  @FunctionalInterface
+  public interface UploadTask {
+    void exec() throws IOException;
   }
 
   public interface ConvertResolver {
