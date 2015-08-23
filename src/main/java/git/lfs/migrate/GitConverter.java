@@ -175,7 +175,7 @@ public class GitConverter {
           if (needAttributes && treeParser.getEntryPathString().equals(GIT_ATTRIBUTES)) {
             blobTask = TaskType.Attribute;
             needAttributes = false;
-          } else if ((fileMode.getObjectType() == Constants.OBJ_BLOB) && (fileMode == FileMode.REGULAR_FILE) && matchFilename(treeParser.getEntryPathString())) {
+          } else if ((fileMode.getObjectType() == Constants.OBJ_BLOB) && ((fileMode.getBits() & FileMode.TYPE_MASK) == FileMode.TYPE_FILE) && matchFilename(treeParser.getEntryPathString())) {
             blobTask = TaskType.UploadLfs;
           } else {
             blobTask = TaskType.Simple;
