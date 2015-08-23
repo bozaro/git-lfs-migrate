@@ -175,7 +175,7 @@ public class GitConverter {
           if (needAttributes && treeParser.getEntryPathString().equals(GIT_ATTRIBUTES)) {
             blobTask = TaskType.Attribute;
             needAttributes = false;
-          } else if ((fileMode.getObjectType() == Constants.OBJ_BLOB) && ((fileMode.getBits() & FileMode.TYPE_MASK) == FileMode.TYPE_FILE) && matchFilename(treeParser.getEntryPathString())) {
+          } else if (isFile(fileMode) && matchFilename(treeParser.getEntryPathString())) {
             blobTask = TaskType.UploadLfs;
           } else {
             blobTask = TaskType.Simple;
@@ -187,6 +187,10 @@ public class GitConverter {
           entries.add(new GitTreeEntry(FileMode.REGULAR_FILE, new TaskKey(TaskType.Attribute, ObjectId.zeroId()), GIT_ATTRIBUTES));
         }
         return entries;
+      }
+
+      private boolean isFile(@NotNull FileMode fileMode) {
+        return (fileMode.getObjectType() == Constants.OBJ_BLOB) && ((fileMode.getBits() & FileMode.TYPE_MASK) == FileMode.TYPE_FILE);
       }
 
       @NotNull
@@ -236,6 +240,13 @@ public class GitConverter {
       @NotNull
       @Override
       public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
+        final ObjectLoader loader = reader.open(id, Constants.OBJ_BLOB);
+        // Is object already converted?
+        if (isLfsPointer(loader)) {
+          inserter.insert(loader.getType(), loader.getBytes());
+          return id;
+        }
+        // Prepare for hash calculation
         final MessageDigest md;
         try {
           md = MessageDigest.getInstance("SHA-256");
@@ -244,7 +255,6 @@ public class GitConverter {
         }
         // Create LFS stream.
         final File tmpFile = new File(tempPath, id.getName());
-        final ObjectLoader loader = reader.open(id, Constants.OBJ_BLOB);
         try (InputStream istream = loader.openStream();
              OutputStream ostream = new FileOutputStream(tmpFile)) {
           byte[] buffer = new byte[0x10000];
@@ -275,6 +285,12 @@ public class GitConverter {
         return inserter.insert(Constants.OBJ_BLOB, pointer.toString().getBytes(StandardCharsets.UTF_8));
       }
     };
+  }
+
+  private boolean isLfsPointer(@NotNull ObjectLoader loader) {
+    if (loader.getSize() > LfsPointer.POINTER_MAX_SIZE) return false;
+    if (LfsPointer.parsePointer(loader.getBytes()) == null) return false;
+    return true;
   }
 
   private void checkAndUpload(@NotNull ObjectLoader loader, @NotNull String hash) throws IOException {
