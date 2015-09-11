@@ -1,11 +1,11 @@
 package git.lfs.migrate;
 
-import com.beust.jcommander.internal.Nullable;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.stream.JsonWriter;
 import org.apache.commons.codec.binary.Hex;
+import org.apache.commons.httpclient.Header;
 import org.apache.commons.httpclient.HttpClient;
 import org.apache.commons.httpclient.HttpStatus;
 import org.apache.commons.httpclient.methods.InputStreamRequestEntity;
@@ -16,6 +16,7 @@ import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.revwalk.*;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.mapdb.DB;
 import org.mapdb.DBMaker;
 import org.mapdb.HTreeMap;
@@ -300,7 +301,7 @@ public class GitConverter implements AutoCloseable {
     } else {
       hash = cached;
     }
-    reply(() -> checkAndUpload(loader, lfs, hash));
+    reply(new URL(lfs, "objects"), (url) -> checkAndUpload(loader, url, hash));
     return hash;
   }
 
@@ -349,12 +350,13 @@ public class GitConverter implements AutoCloseable {
     return true;
   }
 
-  private void checkAndUpload(@NotNull ObjectLoader loader, @NotNull URL lfs, @NotNull String hash) throws IOException {
+  @Nullable
+  private URL checkAndUpload(@NotNull ObjectLoader loader, @NotNull URL url, @NotNull String hash) throws IOException {
     HttpClient client = new HttpClient();
-    PostMethod post = new PostMethod(new URL(lfs, "objects").toString());
+    PostMethod post = new PostMethod(url.toString());
     post.addRequestHeader("Accept", "application/vnd.git-lfs+json");
-    if (lfs.getUserInfo() != null) {
-      post.addRequestHeader("Authorization", "Basic " + Base64.getEncoder().encodeToString(lfs.getUserInfo().getBytes(StandardCharsets.UTF_8)));
+    if (url.getUserInfo() != null) {
+      post.addRequestHeader("Authorization", "Basic " + Base64.getEncoder().encodeToString(url.getUserInfo().getBytes(StandardCharsets.UTF_8)));
     }
 
     try (StringWriter writer = new StringWriter()) {
@@ -367,9 +369,15 @@ public class GitConverter implements AutoCloseable {
     }
 
     final int postStatus = client.executeMethod(post);
+    final Header location = post.getResponseHeader("Location");
+    if (location != null) {
+      if (postStatus == HttpStatus.SC_MOVED_PERMANENTLY || postStatus == HttpStatus.SC_MOVED_TEMPORARILY) {
+        return new URL(location.getValue());
+      }
+    }
     if (postStatus == HttpStatus.SC_OK) {
       // Already uploaded.
-      return;
+      return null;
     }
     if (postStatus != HttpStatus.SC_ACCEPTED) {
       throw new HttpError(post, "I can't get details for object " + hash + " uploading");
@@ -386,23 +394,28 @@ public class GitConverter implements AutoCloseable {
     for (Map.Entry<String, JsonElement> entry : upload.get("header").getAsJsonObject().entrySet()) {
       header.put(entry.getKey(), entry.getValue().getAsString());
     }
-    reply(() -> upload(loader, hash, upload.get("href").getAsString(), header));
+    reply(new URL(upload.get("href").getAsString()), (uploadUrl) -> upload(loader, hash, uploadUrl, header));
+    return null;
   }
 
-  private void reply(@NotNull UploadTask href) throws IOException {
+  private void reply(@NotNull URL url, @NotNull UploadTask href) throws IOException {
+    URL location = url;
     for (int pass = 0; pass < PASS_COUNT - 1; ++pass) {
       try {
-        href.exec();
-        return;
+        location = href.exec(location);
+        if (location == null) {
+          return;
+        }
       } catch (IOException ignored) {
       }
     }
-    href.exec();
+    href.exec(location);
   }
 
-  private void upload(@NotNull ObjectLoader loader, @NotNull String hash, @NotNull String href, @NotNull Map<String, String> header) throws IOException {
+  @Nullable
+  private URL upload(@NotNull ObjectLoader loader, @NotNull String hash, @NotNull URL href, @NotNull Map<String, String> header) throws IOException {
     // Upload data.
-    PutMethod put = new PutMethod(href);
+    PutMethod put = new PutMethod(href.toString());
     for (Map.Entry<String, String> entry : header.entrySet()) {
       put.addRequestHeader(entry.getKey(), entry.getValue());
     }
@@ -410,10 +423,17 @@ public class GitConverter implements AutoCloseable {
     try (InputStream stream = loader.openStream()) {
       put.setRequestEntity(new InputStreamRequestEntity(stream, loader.getSize(), "application/octet-stream"));
       final int putStatus = client.executeMethod(put);
+      final Header location = put.getResponseHeader("Location");
+      if (location != null) {
+        if (putStatus == HttpStatus.SC_MOVED_PERMANENTLY || putStatus == HttpStatus.SC_MOVED_TEMPORARILY) {
+          return new URL(location.getValue());
+        }
+      }
       if (putStatus != HttpStatus.SC_OK) {
         throw new HttpError(put, "I can't upload object " + hash);
       }
     }
+    return null;
   }
 
   @NotNull
@@ -486,7 +506,8 @@ public class GitConverter implements AutoCloseable {
 
   @FunctionalInterface
   public interface UploadTask {
-    void exec() throws IOException;
+    @Nullable
+    URL exec(@NotNull URL url) throws IOException;
   }
 
   public interface ConvertResolver {
