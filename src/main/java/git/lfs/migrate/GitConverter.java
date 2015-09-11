@@ -246,36 +246,7 @@ public class GitConverter {
           inserter.insert(loader.getType(), loader.getBytes());
           return id;
         }
-        // Prepare for hash calculation
-        final MessageDigest md;
-        try {
-          md = MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException e) {
-          throw new IllegalStateException(e);
-        }
-        // Create LFS stream.
-        final File tmpFile = new File(tempPath, id.getName());
-        try (InputStream istream = loader.openStream();
-             OutputStream ostream = new FileOutputStream(tmpFile)) {
-          byte[] buffer = new byte[0x10000];
-          while (true) {
-            int size = istream.read(buffer);
-            if (size <= 0) break;
-            ostream.write(buffer, 0, size);
-            md.update(buffer, 0, size);
-          }
-        }
-        String hash = new String(Hex.encodeHex(md.digest(), true));
-        // Rename file.
-        final File lfsFile = new File(basePath, "lfs/objects/" + hash.substring(0, 2) + "/" + hash.substring(2, 4) + "/" + hash);
-        lfsFile.getParentFile().mkdirs();
-        if (lfsFile.exists()) {
-          tmpFile.delete();
-        } else if (!tmpFile.renameTo(lfsFile)) {
-          throw new IOException("Can't rename file: " + tmpFile + " -> " + lfsFile);
-        }
-        // Upload file.
-        reply(() -> checkAndUpload(loader, hash));
+        final String hash = (lfs == null) ? createLocalFile(loader) : createRemoteFile(loader, lfs);
         // Create pointer.
         StringWriter pointer = new StringWriter();
         pointer.write("version https://git-lfs.github.com/spec/v1\n");
@@ -287,17 +258,67 @@ public class GitConverter {
     };
   }
 
+  @NotNull
+  private String createRemoteFile(@NotNull ObjectLoader loader, @NotNull URL lfs) throws IOException {
+    // Create LFS stream.
+    final MessageDigest md = createSha256();
+    try (InputStream istream = loader.openStream()) {
+      byte[] buffer = new byte[0x10000];
+      while (true) {
+        int size = istream.read(buffer);
+        if (size <= 0) break;
+        md.update(buffer, 0, size);
+      }
+    }
+    final String hash = new String(Hex.encodeHex(md.digest(), true));
+    reply(() -> checkAndUpload(loader, lfs, hash));
+    return hash;
+  }
+
+  @NotNull
+  private String createLocalFile(@NotNull ObjectLoader loader) throws IOException {
+    // Create LFS stream.
+    final File tmpFile = new File(tempPath, UUID.randomUUID().toString());
+    final MessageDigest md = createSha256();
+    try (InputStream istream = loader.openStream();
+         OutputStream ostream = new FileOutputStream(tmpFile)) {
+      byte[] buffer = new byte[0x10000];
+      while (true) {
+        int size = istream.read(buffer);
+        if (size <= 0) break;
+        ostream.write(buffer, 0, size);
+        md.update(buffer, 0, size);
+      }
+    }
+    String hash = new String(Hex.encodeHex(md.digest(), true));
+    // Rename file.
+    final File lfsFile = new File(basePath, "lfs/objects/" + hash.substring(0, 2) + "/" + hash.substring(2, 4) + "/" + hash);
+    lfsFile.getParentFile().mkdirs();
+    if (lfsFile.exists()) {
+      tmpFile.delete();
+    } else if (!tmpFile.renameTo(lfsFile)) {
+      throw new IOException("Can't rename file: " + tmpFile + " -> " + lfsFile);
+    }
+    return hash;
+  }
+
+  @NotNull
+  private static MessageDigest createSha256() {
+    // Prepare for hash calculation
+    try {
+      return MessageDigest.getInstance("SHA-256");
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
   private boolean isLfsPointer(@NotNull ObjectLoader loader) {
     if (loader.getSize() > LfsPointer.POINTER_MAX_SIZE) return false;
     if (LfsPointer.parsePointer(loader.getBytes()) == null) return false;
     return true;
   }
 
-  private void checkAndUpload(@NotNull ObjectLoader loader, @NotNull String hash) throws IOException {
-    if (lfs == null) {
-      return;
-    }
-
+  private void checkAndUpload(@NotNull ObjectLoader loader, @NotNull URL lfs, @NotNull String hash) throws IOException {
     HttpClient client = new HttpClient();
     PostMethod post = new PostMethod(new URL(lfs, "objects").toString());
     post.addRequestHeader("Accept", "application/vnd.git-lfs+json");
