@@ -16,6 +16,9 @@ import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.revwalk.*;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
 import org.jetbrains.annotations.NotNull;
+import org.mapdb.DB;
+import org.mapdb.DBMaker;
+import org.mapdb.HTreeMap;
 
 import java.io.*;
 import java.net.URL;
@@ -28,7 +31,7 @@ import java.util.*;
  * Converter for git objects.
  * Created by bozaro on 09.06.15.
  */
-public class GitConverter {
+public class GitConverter implements AutoCloseable {
   @NotNull
   private static final String GIT_ATTRIBUTES = ".gitattributes";
   private static final int PASS_COUNT = 3;
@@ -38,15 +41,33 @@ public class GitConverter {
   private final String[] suffixes;
   @NotNull
   private final File basePath;
+  @NotNull
   private final File tempPath;
+  @NotNull
+  private final DB cache;
+  @NotNull
+  private final HTreeMap<String, String> cacheSha256;
 
-  public GitConverter(@NotNull File basePath, @Nullable URL lfs, @NotNull String[] suffixes) {
+  public GitConverter(@NotNull File cachePath, @NotNull File basePath, @Nullable URL lfs, @NotNull String[] suffixes) {
     this.basePath = basePath;
     this.suffixes = suffixes.clone();
     this.lfs = lfs;
 
     tempPath = new File(basePath, "lfs/tmp");
     tempPath.mkdirs();
+
+    cachePath.mkdirs();
+    cache = DBMaker.newFileDB(new File(cachePath, "git-lfs-migrate.mapdb"))
+        .asyncWriteEnable()
+        .mmapFileEnable()
+        .cacheSoftRefEnable()
+        .make();
+    cacheSha256 = cache.getHashMap("sha256");
+  }
+
+  @Override
+  public void close() throws IOException {
+    cache.close();
   }
 
   @NotNull
@@ -246,7 +267,7 @@ public class GitConverter {
           inserter.insert(loader.getType(), loader.getBytes());
           return id;
         }
-        final String hash = (lfs == null) ? createLocalFile(loader) : createRemoteFile(loader, lfs);
+        final String hash = (lfs == null) ? createLocalFile(id, loader) : createRemoteFile(id, loader, lfs);
         // Create pointer.
         StringWriter pointer = new StringWriter();
         pointer.write("version https://git-lfs.github.com/spec/v1\n");
@@ -259,24 +280,32 @@ public class GitConverter {
   }
 
   @NotNull
-  private String createRemoteFile(@NotNull ObjectLoader loader, @NotNull URL lfs) throws IOException {
+  private String createRemoteFile(@NotNull ObjectId id, @NotNull ObjectLoader loader, @NotNull URL lfs) throws IOException {
     // Create LFS stream.
-    final MessageDigest md = createSha256();
-    try (InputStream istream = loader.openStream()) {
-      byte[] buffer = new byte[0x10000];
-      while (true) {
-        int size = istream.read(buffer);
-        if (size <= 0) break;
-        md.update(buffer, 0, size);
+    final String hash;
+    final String cached = cacheSha256.get(id.name());
+    if (cached == null) {
+      final MessageDigest md = createSha256();
+      try (InputStream istream = loader.openStream()) {
+        byte[] buffer = new byte[0x10000];
+        while (true) {
+          int size = istream.read(buffer);
+          if (size <= 0) break;
+          md.update(buffer, 0, size);
+        }
       }
+      hash = new String(Hex.encodeHex(md.digest(), true));
+      cacheSha256.put(id.name(), hash);
+      cache.commit();
+    } else {
+      hash = cached;
     }
-    final String hash = new String(Hex.encodeHex(md.digest(), true));
     reply(() -> checkAndUpload(loader, lfs, hash));
     return hash;
   }
 
   @NotNull
-  private String createLocalFile(@NotNull ObjectLoader loader) throws IOException {
+  private String createLocalFile(@NotNull ObjectId id, @NotNull ObjectLoader loader) throws IOException {
     // Create LFS stream.
     final File tmpFile = new File(tempPath, UUID.randomUUID().toString());
     final MessageDigest md = createSha256();
@@ -290,7 +319,9 @@ public class GitConverter {
         md.update(buffer, 0, size);
       }
     }
-    String hash = new String(Hex.encodeHex(md.digest(), true));
+    final String hash = new String(Hex.encodeHex(md.digest(), true));
+    cacheSha256.putIfAbsent(id.name(), hash);
+    cache.commit();
     // Rename file.
     final File lfsFile = new File(basePath, "lfs/objects/" + hash.substring(0, 2) + "/" + hash.substring(2, 4) + "/" + hash);
     lfsFile.getParentFile().mkdirs();

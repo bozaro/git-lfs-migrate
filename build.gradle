@@ -18,6 +18,7 @@ apply plugin: "java"
 dependencies {
   compile "org.jetbrains:annotations:13.0"
   compile "org.eclipse.jgit:org.eclipse.jgit:3.6.2.201501210735-r"
+  compile "org.mapdb:mapdb:1.0.6"
   compile "org.slf4j:slf4j-simple:1.7.7"
   compile "org.jgrapht:jgrapht-core:0.9.1"
   compile "com.beust:jcommander:1.35"

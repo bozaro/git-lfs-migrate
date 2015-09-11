@@ -43,7 +43,7 @@ public class Main {
       return;
     }
     final long time = System.currentTimeMillis();
-    processRepository(cmd.src, cmd.dst, prepareUrl(cmd.lfs), cmd.threads, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
+    processRepository(cmd.src, cmd.dst, cmd.cache, prepareUrl(cmd.lfs), cmd.threads, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
     log.info("Convert time: {}", System.currentTimeMillis() - time);
   }
 
@@ -54,7 +54,7 @@ public class Main {
     return new URL(url + "/");
   }
 
-  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @Nullable URL lfs, int threads, @NotNull String... suffixes) throws IOException, InterruptedException {
+  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @NotNull File cachePath, @Nullable URL lfs, int threads, @NotNull String... suffixes) throws IOException, InterruptedException {
     removeDirectory(dstPath);
     dstPath.mkdirs();
 
@@ -64,7 +64,8 @@ public class Main {
     final Repository dstRepo = new FileRepositoryBuilder()
         .setMustExist(false)
         .setGitDir(dstPath).build();
-    final GitConverter converter = new GitConverter(dstPath, lfs, suffixes);
+
+    final GitConverter converter = new GitConverter(cachePath, dstPath, lfs, suffixes);
     try {
       dstRepo.create(true);
       // Load all revision list.
@@ -276,6 +277,9 @@ public class Main {
     @Parameter(names = {"-d", "--destination"}, description = "Destination repository", required = true)
     @NotNull
     private File dst;
+    @Parameter(names = {"-c", "--cache"}, description = "Source repository", required = false)
+    @NotNull
+    private File cache = new File(".");
     @Parameter(names = {"-l", "--lfs"}, description = "LFS URL", required = false)
     @Nullable
     private String lfs;
