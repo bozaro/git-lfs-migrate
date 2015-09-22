@@ -4,6 +4,7 @@ import org.jetbrains.annotations.NotNull;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
+import ru.bozaro.gitlfs.pointer.Pointer;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -16,7 +17,7 @@ import java.util.Map;
 public class LfsPointerTest {
   @Test
   public void parsePointerTest() {
-    final Map<String, String> pointer = LfsPointer.parsePointer(("version https://git-lfs.github.com/spec/v1\n" +
+    final Map<String, String> pointer = Pointer.parsePointer(("version https://git-lfs.github.com/spec/v1\n" +
         "hash 12345\n" +
         "oid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\n" +
         "size 12345\n").getBytes(StandardCharsets.UTF_8));
@@ -89,7 +90,7 @@ public class LfsPointerTest {
 
   @Test(dataProvider = "parseNonPointerData")
   public void parseNonPointerTest(@NotNull String message, @NotNull String pointer) {
-    Assert.assertNull(LfsPointer.parsePointer(pointer.getBytes(StandardCharsets.UTF_8)), message);
+    Assert.assertNull(Pointer.parsePointer(pointer.getBytes(StandardCharsets.UTF_8)), message);
   }
 
   @Test
@@ -99,6 +100,6 @@ public class LfsPointerTest {
         "size 12345\n").getBytes(StandardCharsets.UTF_8);
     pointer[100] = (byte) 0xFF;
     pointer[101] = (byte) 0xFF;
-    Assert.assertNull(LfsPointer.parsePointer(pointer));
+    Assert.assertNull(Pointer.parsePointer(pointer));
   }
 }

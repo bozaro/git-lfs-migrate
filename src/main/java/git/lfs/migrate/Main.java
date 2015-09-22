@@ -14,7 +14,7 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
-import java.net.URL;
+import java.net.URI;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -48,13 +48,13 @@ public class Main {
   }
 
   @Nullable
-  private static URL prepareUrl(@Nullable String url) throws MalformedURLException {
+  private static URI prepareUrl(@Nullable String url) throws MalformedURLException {
     if (url == null) return null;
-    if (url.endsWith("/")) return new URL(url);
-    return new URL(url + "/");
+    if (url.endsWith("/")) return URI.create(url);
+    return URI.create(url + "/");
   }
 
-  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @NotNull File cachePath, @Nullable URL lfs, int threads, @NotNull String... suffixes) throws IOException, InterruptedException {
+  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @NotNull File cachePath, @Nullable URI lfs, int threads, @NotNull String... suffixes) throws IOException, InterruptedException {
     removeDirectory(dstPath);
     dstPath.mkdirs();
 
