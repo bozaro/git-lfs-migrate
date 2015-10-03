@@ -6,20 +6,6 @@ Simple project for convert old repository for using git-lfs feature.
 
 # How to use
 
-## How to get LFS server URL
-
-You can get correct LFS server URL by command like:
-
-```
-ssh git@github.com git-lfs-authenticate bozaro/git-lfs-migrate upload
-```
-
-For GitHub LFS server URL looks like:
-
-```
-https://bozaro:*****@api.github.com/lfs/bozaro/git-lfs-migrate
-```
-
 ## Run from binaries
 
 For quick run you need:
@@ -41,23 +27,28 @@ git clone --mirror git@github.com:bozaro/git-lfs-migrate.git
 # Convert repository with moving .md and .jar file to LFS
 #
 # Usage: <main class> [options] LFS file suffixes
-#  Options:
-#  * -d, --destination
-#       Destination repository
-#    -h, --help
-#       Show help
-#       Default: false
-#    -l, --lfs
-#       LFS URL
-#  * -s, --source
-#       Source repository
-#    -t, --threads
-#       Thread count
-#       Default: 8
+#   Options:
+#     -c, --cache
+#        Source repository
+#        Default: .
+#   * -d, --destination
+#        Destination repository
+#     -g, --git
+#       GIT repository url (ignored with --lfs parameter)
+#     -h, --help
+#        Show help
+#        Default: false
+#     -l, --lfs
+#        LFS server url (can be determinated by --git paramter)
+#   * -s, --source
+#        Source repository
+#     -t, --threads
+#        Thread count
+#        Default: CPU core count
 java -jar git-lfs-migrate.jar \
      -s git-lfs-migrate.git \
      -d git-lfs-migrate-converted.git \
-     -l https://bozaro:*****@api.github.com/lfs/bozaro/git-lfs-migrate-converted \
+     -g git@github.com:bozaro/git-lfs-migrate-converted.git \
      .md \
      .jar
 
@@ -75,6 +66,14 @@ After that you with have:
 *.md    filter=lfs diff=lfs merge=lfs -crlf
 *.jar   filter=lfs diff=lfs merge=lfs -crlf
 ```
+
+Supported Git url formats:
+
+ * https://user:passw0rd@github.com/foo/bar.git
+ * http://user:passw0rd@github.com/foo/bar.git
+ * git://user:passw0rd@github.com/foo/bar.git
+ * ssh://git@github.com/foo/bar.git
+ * git@github.com:foo/bar.git
 
 ## Build from sources
 

@@ -23,8 +23,8 @@ dependencies {
   compile "org.jgrapht:jgrapht-core:0.9.1"
   compile "com.beust:jcommander:1.35"
 
-  compile "ru.bozaro.gitlfs:gitlfs-pointer:0.1.0"
-  compile "ru.bozaro.gitlfs:gitlfs-client:0.1.0"
+  compile "ru.bozaro.gitlfs:gitlfs-pointer:0.3.0"
+  compile "ru.bozaro.gitlfs:gitlfs-client:0.3.0"
 
   testCompile "org.testng:testng:6.8.8"
 }

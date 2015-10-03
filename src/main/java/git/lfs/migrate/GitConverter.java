@@ -9,12 +9,11 @@ import org.jetbrains.annotations.Nullable;
 import org.mapdb.DB;
 import org.mapdb.DBMaker;
 import org.mapdb.HTreeMap;
-import ru.bozaro.gitlfs.common.client.BasicAuthProvider;
-import ru.bozaro.gitlfs.common.client.Client;
+import ru.bozaro.gitlfs.client.Client;
+import ru.bozaro.gitlfs.client.auth.AuthProvider;
 import ru.bozaro.gitlfs.pointer.Pointer;
 
 import java.io.*;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -28,7 +27,7 @@ public class GitConverter implements AutoCloseable {
   @NotNull
   private static final String GIT_ATTRIBUTES = ".gitattributes";
   @Nullable
-  private final URI lfs;
+  private final AuthProvider auth;
   @NotNull
   private final String[] suffixes;
   @NotNull
@@ -40,10 +39,10 @@ public class GitConverter implements AutoCloseable {
   @NotNull
   private final HTreeMap<String, String> cacheSha256;
 
-  public GitConverter(@NotNull File cachePath, @NotNull File basePath, @Nullable URI lfs, @NotNull String[] suffixes) {
+  public GitConverter(@NotNull File cachePath, @NotNull File basePath, @Nullable AuthProvider auth, @NotNull String[] suffixes) {
     this.basePath = basePath;
     this.suffixes = suffixes.clone();
-    this.lfs = lfs;
+    this.auth = auth;
 
     tempPath = new File(basePath, "lfs/tmp");
     tempPath.mkdirs();
@@ -259,7 +258,7 @@ public class GitConverter implements AutoCloseable {
           inserter.insert(loader.getType(), loader.getBytes());
           return id;
         }
-        final String hash = (lfs == null) ? createLocalFile(id, loader) : createRemoteFile(id, loader, lfs);
+        final String hash = (auth == null) ? createLocalFile(id, loader) : createRemoteFile(id, loader, auth);
         // Create pointer.
         StringWriter pointer = new StringWriter();
         pointer.write("version https://git-lfs.github.com/spec/v1\n");
@@ -272,7 +271,7 @@ public class GitConverter implements AutoCloseable {
   }
 
   @NotNull
-  private String createRemoteFile(@NotNull ObjectId id, @NotNull ObjectLoader loader, @NotNull URI lfs) throws IOException {
+  private String createRemoteFile(@NotNull ObjectId id, @NotNull ObjectLoader loader, @NotNull AuthProvider auth) throws IOException {
     // Create LFS stream.
     final String hash;
     final String cached = cacheSha256.get(id.name());
@@ -294,7 +293,7 @@ public class GitConverter implements AutoCloseable {
     } else {
       hash = cached;
     }
-    final Client client = new Client(new BasicAuthProvider(lfs));
+    final Client client = new Client(auth);
     client.putObject(loader::openStream, hash, size);
     return hash;
   }

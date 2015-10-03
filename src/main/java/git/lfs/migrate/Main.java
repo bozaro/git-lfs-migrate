@@ -10,10 +10,12 @@ import org.jgrapht.graph.DefaultEdge;
 import org.jgrapht.graph.SimpleDirectedGraph;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.bozaro.gitlfs.client.AuthHelper;
+import ru.bozaro.gitlfs.client.auth.AuthProvider;
+import ru.bozaro.gitlfs.client.auth.BasicAuthProvider;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.MalformedURLException;
 import java.net.URI;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -43,18 +45,19 @@ public class Main {
       return;
     }
     final long time = System.currentTimeMillis();
-    processRepository(cmd.src, cmd.dst, cmd.cache, prepareUrl(cmd.lfs), cmd.threads, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
+    final AuthProvider auth;
+    if (cmd.lfs != null) {
+      auth = new BasicAuthProvider(URI.create(cmd.lfs));
+    } else if (cmd.git != null) {
+      auth = AuthHelper.create(cmd.git);
+    } else {
+      auth = null;
+    }
+    processRepository(cmd.src, cmd.dst, cmd.cache, auth, cmd.threads, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
     log.info("Convert time: {}", System.currentTimeMillis() - time);
   }
 
-  @Nullable
-  private static URI prepareUrl(@Nullable String url) throws MalformedURLException {
-    if (url == null) return null;
-    if (url.endsWith("/")) return URI.create(url);
-    return URI.create(url + "/");
-  }
-
-  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @NotNull File cachePath, @Nullable URI lfs, int threads, @NotNull String... suffixes) throws IOException, InterruptedException {
+  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @NotNull File cachePath, @Nullable AuthProvider auth, int threads, @NotNull String... suffixes) throws IOException, InterruptedException {
     removeDirectory(dstPath);
     dstPath.mkdirs();
 
@@ -65,7 +68,7 @@ public class Main {
         .setMustExist(false)
         .setGitDir(dstPath).build();
 
-    final GitConverter converter = new GitConverter(cachePath, dstPath, lfs, suffixes);
+    final GitConverter converter = new GitConverter(cachePath, dstPath, auth, suffixes);
     try {
       dstRepo.create(true);
       // Load all revision list.
@@ -280,7 +283,10 @@ public class Main {
     @Parameter(names = {"-c", "--cache"}, description = "Source repository", required = false)
     @NotNull
     private File cache = new File(".");
-    @Parameter(names = {"-l", "--lfs"}, description = "LFS URL", required = false)
+    @Parameter(names = {"-g", "--git"}, description = "GIT repository url (ignored with --lfs parameter)", required = false)
+    @Nullable
+    private String git;
+    @Parameter(names = {"-l", "--lfs"}, description = "LFS server url (can be determinated by --git paramter)", required = false)
     @Nullable
     private String lfs;
     @Parameter(names = {"-t", "--threads"}, description = "Thread count", required = false)
