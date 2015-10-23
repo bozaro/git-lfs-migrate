@@ -73,11 +73,9 @@ public final class GitTreeEntry implements Comparable<GitTreeEntry> {
 
     GitTreeEntry that = (GitTreeEntry) o;
 
-    if (!fileMode.equals(that.fileMode)) return false;
-    if (!taskKey.equals(that.taskKey)) return false;
-    if (!fileName.equals(that.fileName)) return false;
-
-    return true;
+    return fileMode.equals(that.fileMode)
+        && taskKey.equals(that.taskKey)
+        && fileName.equals(that.fileName);
   }
 
   @Override

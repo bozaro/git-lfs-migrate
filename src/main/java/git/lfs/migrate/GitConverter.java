@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * Converter for git objects.
@@ -208,11 +209,7 @@ public class GitConverter implements AutoCloseable {
       @NotNull
       @Override
       public Iterable<TaskKey> depends() throws IOException {
-        final List<TaskKey> result = new ArrayList<>();
-        for (GitTreeEntry entry : getEntries()) {
-          result.add(entry.getTaskKey());
-        }
-        return result;
+        return getEntries().stream().map(GitTreeEntry::getTaskKey).collect(Collectors.toList());
       }
 
       @NotNull
@@ -338,9 +335,8 @@ public class GitConverter implements AutoCloseable {
   }
 
   private boolean isLfsPointer(@NotNull ObjectLoader loader) {
-    if (loader.getSize() > ru.bozaro.gitlfs.pointer.Constants.POINTER_MAX_SIZE) return false;
-    if (Pointer.parsePointer(loader.getBytes()) == null) return false;
-    return true;
+    return loader.getSize() <= ru.bozaro.gitlfs.pointer.Constants.POINTER_MAX_SIZE
+        && Pointer.parsePointer(loader.getBytes()) != null;
   }
 
   @NotNull

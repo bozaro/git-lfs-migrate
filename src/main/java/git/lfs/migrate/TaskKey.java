@@ -37,8 +37,8 @@ public final class TaskKey {
 
     TaskKey taskKey = (TaskKey) o;
 
-    if (type != taskKey.type) return false;
-    return objectId.equals(taskKey.objectId);
+    return (type == taskKey.type)
+        && objectId.equals(taskKey.objectId);
 
   }
 
