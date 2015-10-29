@@ -42,9 +42,12 @@ git clone --mirror git@github.com:bozaro/git-lfs-migrate.git
 #        LFS server url (can be determinated by --git paramter)
 #   * -s, --source
 #        Source repository
-#     -t, --threads
-#        Thread count
-#        Default: CPU core count
+#     -u, --upload-threads
+#        HTTP upload thread count
+#        Default: 4
+#     -t, --write-threads
+#        IO thread count
+#        Default: 2
 java -jar git-lfs-migrate.jar \
      -s git-lfs-migrate.git \
      -d git-lfs-migrate-converted.git \
