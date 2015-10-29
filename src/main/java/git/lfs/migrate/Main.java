@@ -11,8 +11,11 @@ import org.jgrapht.graph.SimpleDirectedGraph;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.bozaro.gitlfs.client.AuthHelper;
+import ru.bozaro.gitlfs.client.BatchUploader;
+import ru.bozaro.gitlfs.client.Client;
 import ru.bozaro.gitlfs.client.auth.AuthProvider;
 import ru.bozaro.gitlfs.client.auth.BasicAuthProvider;
+import ru.bozaro.gitlfs.common.data.Meta;
 
 import java.io.File;
 import java.io.IOException;
@@ -25,6 +28,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -36,7 +40,7 @@ public class Main {
   @NotNull
   private static final Logger log = LoggerFactory.getLogger(Main.class);
 
-  public static void main(@NotNull String[] args) throws IOException, InterruptedException {
+  public static void main(@NotNull String[] args) throws IOException, InterruptedException, ExecutionException {
     final CmdArgs cmd = new CmdArgs();
     final JCommander jc = new JCommander(cmd);
     jc.parse(args);
@@ -53,11 +57,11 @@ public class Main {
     } else {
       auth = null;
     }
-    processRepository(cmd.src, cmd.dst, cmd.cache, auth, cmd.threads, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
+    processRepository(cmd.src, cmd.dst, cmd.cache, auth, cmd.writeThreads, cmd.uploadThreads, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
     log.info("Convert time: {}", System.currentTimeMillis() - time);
   }
 
-  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @NotNull File cachePath, @Nullable AuthProvider auth, int threads, @NotNull String... suffixes) throws IOException, InterruptedException {
+  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @NotNull File cachePath, @Nullable AuthProvider auth, int writeThreads, int uploadThreads, @NotNull String... suffixes) throws IOException, InterruptedException, ExecutionException {
     removeDirectory(dstPath);
     dstPath.mkdirs();
 
@@ -68,7 +72,7 @@ public class Main {
         .setMustExist(false)
         .setGitDir(dstPath).build();
 
-    final GitConverter converter = new GitConverter(cachePath, dstPath, auth, suffixes);
+    final GitConverter converter = new GitConverter(cachePath, dstPath, suffixes);
     try {
       dstRepo.create(true);
       // Load all revision list.
@@ -78,8 +82,10 @@ public class Main {
       log.info("Found objects: {}", totalObjects);
 
       final ConcurrentMap<TaskKey, ObjectId> converted = new ConcurrentHashMap<>();
-      log.info("Converting object without dependencies in " + threads + " threads...", totalObjects);
-      processMultipleThreads(converter, graph, srcRepo, dstRepo, converted, threads);
+      log.info("Converting object without dependencies in " + writeThreads + " threads...", totalObjects);
+      try (HttpUploader uploader = createHttpUploader(srcRepo, auth, uploadThreads)) {
+        processMultipleThreads(converter, graph, srcRepo, dstRepo, converted, uploader, writeThreads);
+      }
 
       log.info("Converting graph in single thread...");
       processSingleThread(converter, graph, srcRepo, dstRepo, converted);
@@ -104,7 +110,12 @@ public class Main {
     }
   }
 
-  private static void processMultipleThreads(@NotNull GitConverter converter, @NotNull SimpleDirectedGraph<TaskKey, DefaultEdge> graph, @NotNull Repository srcRepo, @NotNull Repository dstRepo, @NotNull ConcurrentMap<TaskKey, ObjectId> converted, int threads) throws IOException, InterruptedException {
+  @Nullable
+  private static HttpUploader createHttpUploader(@NotNull Repository repository, @Nullable AuthProvider auth, int uploadThreads) {
+    return auth == null ? null : new HttpUploader(repository, auth, uploadThreads);
+  }
+
+  private static void processMultipleThreads(@NotNull GitConverter converter, @NotNull SimpleDirectedGraph<TaskKey, DefaultEdge> graph, @NotNull Repository srcRepo, @NotNull Repository dstRepo, @NotNull ConcurrentMap<TaskKey, ObjectId> converted, @Nullable HttpUploader uploader, int threads) throws IOException, InterruptedException {
     final Deque<TaskKey> queue = new ConcurrentLinkedDeque<>();
     for (TaskKey vertex : graph.vertexSet()) {
       if (graph.outgoingEdgesOf(vertex).isEmpty()) {
@@ -113,7 +124,7 @@ public class Main {
     }
     graph.removeAllVertices(queue);
     final ExecutorService pool = Executors.newFixedThreadPool(threads);
-    try (ProgressReporter reporter = new ProgressReporter("completed", queue.size())) {
+    try (ProgressReporter reporter = new ProgressReporter("processed", queue.size(), uploader)) {
       final AtomicBoolean done = new AtomicBoolean(false);
       final List<Future<?>> jobs = new ArrayList<>(threads);
       for (int i = 0; i < threads; ++i) {
@@ -124,7 +135,7 @@ public class Main {
             while (!done.get()) {
               final TaskKey taskKey = queue.poll();
               if (taskKey == null) break;
-              final ObjectId objectId = converter.convertTask(reader, taskKey).convert(inserter, converted::get);
+              final ObjectId objectId = converter.convertTask(reader, taskKey).convert(inserter, converted::get, uploader);
               converted.put(taskKey, objectId);
               reporter.increment();
             }
@@ -149,7 +160,7 @@ public class Main {
   }
 
   private static void processSingleThread(@NotNull GitConverter converter, @NotNull SimpleDirectedGraph<TaskKey, DefaultEdge> graph, @NotNull Repository srcRepo, @NotNull Repository dstRepo, @NotNull Map<TaskKey, ObjectId> converted) throws IOException {
-    try (ProgressReporter reporter = new ProgressReporter("completed", graph.vertexSet().size())) {
+    try (ProgressReporter reporter = new ProgressReporter("completed", graph.vertexSet().size(), null)) {
       final Deque<TaskKey> queue = new ArrayDeque<>();
       for (TaskKey vertex : graph.vertexSet()) {
         if (graph.outgoingEdgesOf(vertex).isEmpty()) {
@@ -160,7 +171,9 @@ public class Main {
       final ObjectReader reader = srcRepo.newObjectReader();
       while (!queue.isEmpty()) {
         final TaskKey taskKey = queue.pop();
-        final ObjectId objectId = converter.convertTask(reader, taskKey).convert(inserter, converted::get);
+        final ObjectId objectId = converter.convertTask(reader, taskKey).convert(inserter, converted::get, (oid, meta) -> {
+          throw new UnsupportedOperationException("Not supported on this repository convert stage");
+        });
         converted.put(taskKey, objectId);
 
         final List<TaskKey> sources = new ArrayList<>();
@@ -199,7 +212,7 @@ public class Main {
   }
 
   private static SimpleDirectedGraph<TaskKey, DefaultEdge> loadTaskGraph(@NotNull GitConverter converter, @NotNull Repository repository) throws IOException {
-    try (ProgressReporter reporter = new ProgressReporter("found", -1)) {
+    try (ProgressReporter reporter = new ProgressReporter("found", -1, null)) {
       final Map<String, Ref> refs = repository.getAllRefs();
       final SimpleDirectedGraph<TaskKey, DefaultEdge> graph = new SimpleDirectedGraph<>(DefaultEdge.class);
       final Deque<TaskKey> queue = new ArrayDeque<>();
@@ -236,6 +249,59 @@ public class Main {
     new EvilThrower<RuntimeException>().sneakyThrow(exception);
   }
 
+  public static class HttpUploader implements GitConverter.Uploader, AutoCloseable {
+    @NotNull
+    private final ThreadLocal<ObjectReader> readers = new ThreadLocal<>();
+    @NotNull
+    private final ExecutorService pool;
+    @NotNull
+    private final Repository repository;
+    @NotNull
+    private final BatchUploader uploader;
+    @NotNull
+    private final Collection<CompletableFuture<?>> futures = new LinkedBlockingQueue<>();
+    @NotNull
+    private final AtomicInteger finished = new AtomicInteger();
+    @NotNull
+    private final AtomicInteger total = new AtomicInteger();
+
+    public HttpUploader(@NotNull Repository repository, @NotNull AuthProvider auth, int threads) {
+      this.pool = Executors.newFixedThreadPool(threads);
+      this.uploader = new BatchUploader(new Client(auth), pool);
+      this.repository = repository;
+    }
+
+    @Override
+    public void upload(@NotNull ObjectId oid, @NotNull Meta meta) {
+      total.incrementAndGet();
+      futures.add(uploader.upload(meta, () -> getReader().open(oid).openStream()).thenAccept((m) -> finished.incrementAndGet()));
+    }
+
+    @NotNull
+    private ObjectReader getReader() {
+      ObjectReader reader = readers.get();
+      if (reader == null) {
+        reader = repository.newObjectReader();
+        readers.set(reader);
+      }
+      return reader;
+    }
+
+    @Override
+    public void close() throws ExecutionException, InterruptedException {
+      CompletableFuture.allOf(futures.toArray(new CompletableFuture[futures.size()])).get();
+      pool.shutdown();
+    }
+
+    public int getTotal() {
+      return total.get();
+    }
+
+    public int getFinished() {
+      return finished.get();
+    }
+  }
+
   public static class ProgressReporter implements AutoCloseable {
     private static final long DELAY = TimeUnit.SECONDS.toMillis(1);
     private final long total;
@@ -245,10 +311,13 @@ public class Main {
     private final AtomicLong lastTime = new AtomicLong(0);
     @NotNull
     private final String prefix;
+    @Nullable
+    private final HttpUploader uploader;
 
-    public ProgressReporter(@NotNull String prefix, long total) {
+    public ProgressReporter(@NotNull String prefix, long total, @Nullable HttpUploader uploader) {
       this.prefix = prefix;
       this.total = total;
+      this.uploader = uploader;
     }
 
     public void increment() {
@@ -268,7 +337,11 @@ public class Main {
     }
 
     private void print(long current) {
-      log.info("  " + prefix + ": " + current + (total >= 0 ? "/" + total : ""));
+      String message = "  " + prefix + ": " + current + (total >= 0 ? "/" + total : "");
+      if (uploader != null) {
+        message += ", uploaded: " + uploader.getFinished() + "/" + uploader.getTotal();
+      }
+      log.info(message);
     }
 
   }
@@ -289,8 +362,10 @@ public class Main {
     @Parameter(names = {"-l", "--lfs"}, description = "LFS server url (can be determinated by --git paramter)", required = false)
     @Nullable
     private String lfs;
-    @Parameter(names = {"-t", "--threads"}, description = "Thread count", required = false)
-    private int threads = Runtime.getRuntime().availableProcessors();
+    @Parameter(names = {"-t", "--write-threads"}, description = "IO thread count", required = false)
+    private int writeThreads = 2;
+    @Parameter(names = {"-u", "--upload-threads"}, description = "HTTP upload thread count", required = false)
+    private int uploadThreads = 4;
 
     @Parameter(description = "LFS file suffixes")
     @NotNull

@@ -9,8 +9,9 @@ import org.jetbrains.annotations.Nullable;
 import org.mapdb.DB;
 import org.mapdb.DBMaker;
 import org.mapdb.HTreeMap;
-import ru.bozaro.gitlfs.client.Client;
-import ru.bozaro.gitlfs.client.auth.AuthProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import ru.bozaro.gitlfs.common.data.Meta;
 import ru.bozaro.gitlfs.pointer.Pointer;
 
 import java.io.*;
@@ -26,9 +27,9 @@ import java.util.stream.Collectors;
  */
 public class GitConverter implements AutoCloseable {
   @NotNull
+  private static final Logger log = LoggerFactory.getLogger(GitConverter.class);
+  @NotNull
   private static final String GIT_ATTRIBUTES = ".gitattributes";
-  @Nullable
-  private final AuthProvider auth;
   @NotNull
   private final String[] suffixes;
   @NotNull
@@ -40,15 +41,13 @@ public class GitConverter implements AutoCloseable {
   @NotNull
   private final HTreeMap<String, String> cacheSha256;
 
-  public GitConverter(@NotNull File cachePath, @NotNull File basePath, @Nullable AuthProvider auth, @NotNull String[] suffixes) {
+  public GitConverter(@NotNull File cachePath, @NotNull File basePath, @NotNull String[] suffixes) throws IOException {
     this.basePath = basePath;
     this.suffixes = suffixes.clone();
-    this.auth = auth;
 
     tempPath = new File(basePath, "lfs/tmp");
-    tempPath.mkdirs();
-
-    cachePath.mkdirs();
+    makeParentDirs(tempPath);
+    makeParentDirs(cachePath);
     cache = DBMaker.newFileDB(new File(cachePath, "git-lfs-migrate.mapdb"))
         .asyncWriteEnable()
         .mmapFileEnable()
@@ -110,7 +109,7 @@ public class GitConverter implements AutoCloseable {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
+      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         return objectId;
       }
     };
@@ -129,7 +128,7 @@ public class GitConverter implements AutoCloseable {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
+      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final ObjectId id = resolver.resolve(TaskType.Simple, revObject.getObject());
         final TagBuilder builder = new TagBuilder();
         builder.setMessage(revObject.getFullMessage());
@@ -157,7 +156,7 @@ public class GitConverter implements AutoCloseable {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
+      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final CommitBuilder builder = new CommitBuilder();
         builder.setAuthor(revObject.getAuthorIdent());
         builder.setCommitter(revObject.getCommitterIdent());
@@ -214,7 +213,7 @@ public class GitConverter implements AutoCloseable {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
+      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final List<GitTreeEntry> entries = getEntries();
         // Create new tree.
         Collections.sort(entries);
@@ -238,7 +237,7 @@ public class GitConverter implements AutoCloseable {
   }
 
   @NotNull
-  private ConvertTask convertLfsTask(@NotNull ObjectReader reader, @Nullable ObjectId id) throws IOException {
+  private ConvertTask convertLfsTask(@NotNull ObjectReader reader, @NotNull ObjectId id) throws IOException {
     return new ConvertTask() {
       @NotNull
       @Override
@@ -248,14 +247,14 @@ public class GitConverter implements AutoCloseable {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
+      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final ObjectLoader loader = reader.open(id, Constants.OBJ_BLOB);
         // Is object already converted?
         if (isLfsPointer(loader)) {
           inserter.insert(loader.getType(), loader.getBytes());
           return id;
         }
-        final String hash = (auth == null) ? createLocalFile(id, loader) : createRemoteFile(id, loader, auth);
+        final String hash = (uploader == null) ? createLocalFile(id, loader) : createRemoteFile(id, loader, uploader);
         // Create pointer.
         StringWriter pointer = new StringWriter();
         pointer.write("version https://git-lfs.github.com/spec/v1\n");
@@ -268,7 +267,7 @@ public class GitConverter implements AutoCloseable {
   }
 
   @NotNull
-  private String createRemoteFile(@NotNull ObjectId id, @NotNull ObjectLoader loader, @NotNull AuthProvider auth) throws IOException {
+  private String createRemoteFile(@NotNull ObjectId id, @NotNull ObjectLoader loader, @NotNull Uploader uploader) throws IOException {
     // Create LFS stream.
     final String hash;
     final String cached = cacheSha256.get(id.name());
@@ -290,8 +289,7 @@ public class GitConverter implements AutoCloseable {
     } else {
       hash = cached;
     }
-    final Client client = new Client(auth);
-    client.putObject(loader::openStream, hash, size);
+    uploader.upload(id, new Meta(hash, size));
     return hash;
   }
 
@@ -315,13 +313,21 @@ public class GitConverter implements AutoCloseable {
     cache.commit();
     // Rename file.
     final File lfsFile = new File(basePath, "lfs/objects/" + hash.substring(0, 2) + "/" + hash.substring(2, 4) + "/" + hash);
-    lfsFile.getParentFile().mkdirs();
+    makeParentDirs(lfsFile.getParentFile());
     if (lfsFile.exists()) {
-      tmpFile.delete();
+      if (!tmpFile.delete()) {
+        log.warn("Can't delete temporary file: {}", lfsFile.getAbsolutePath());
+      }
     } else if (!tmpFile.renameTo(lfsFile)) {
       throw new IOException("Can't rename file: " + tmpFile + " -> " + lfsFile);
     }
     return hash;
+  }
+
+  private void makeParentDirs(@NotNull File path) throws IOException {
+    if (!path.mkdirs() && !path.exists()) {
+      throw new IOException("Can't create directory: " + path.getAbsolutePath());
+    }
   }
 
   @NotNull
@@ -350,7 +356,7 @@ public class GitConverter implements AutoCloseable {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
+      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final Set<String> attributes = new TreeSet<>();
         for (String suffix : suffixes) {
           attributes.add("*" + suffix + "\tfilter=lfs diff=lfs merge=lfs -crlf");
@@ -385,7 +391,7 @@ public class GitConverter implements AutoCloseable {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException {
+      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final ObjectLoader loader = reader.open(id);
         try (ObjectStream stream = loader.openStream()) {
           inserter.insert(loader.getType(), loader.getSize(), stream);
@@ -422,7 +428,11 @@ public class GitConverter implements AutoCloseable {
     Iterable<TaskKey> depends() throws IOException;
 
     @NotNull
-    ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver) throws IOException;
+    ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException;
   }
 
+  @FunctionalInterface
+  public interface Uploader {
+    void upload(@NotNull ObjectId oid, @NotNull Meta meta);
+  }
 }
