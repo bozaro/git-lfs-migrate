@@ -10,6 +10,10 @@ task wrapper(type: Wrapper) {
 
 repositories {
   mavenCentral()
+  mavenLocal()
+  maven {
+    url "https://oss.sonatype.org/content/repositories/snapshots/"
+  }
 }
 
 apply plugin: "idea"
@@ -23,8 +27,8 @@ dependencies {
   compile "org.jgrapht:jgrapht-core:0.9.1"
   compile "com.beust:jcommander:1.35"
 
-  compile "ru.bozaro.gitlfs:gitlfs-pointer:0.6.0"
-  compile "ru.bozaro.gitlfs:gitlfs-client:0.6.0"
+  compile "ru.bozaro.gitlfs:gitlfs-pointer:0.7.0-SNAPSHOT"
+  compile "ru.bozaro.gitlfs:gitlfs-client:0.7.0-SNAPSHOT"
 
   testCompile "org.testng:testng:6.8.8"
 }
