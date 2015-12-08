@@ -12,10 +12,11 @@ For quick run you need:
 
  * Install Java 1.8 or later
  * Download binaries archive from: https://github.com/bozaro/git-lfs-migrate/releases/latest
- * After unpacking archive you can run server executing:<br/>
+ * After unpacking archive you can run server executing:
+
    ```bash
-java -jar build/deploy/git-lfs-migrate.jar -s source-repo.git -d target-repo.git -l http://test:test@lfs-server/ .psd .zip .bin
-```
+   java -jar build/deploy/git-lfs-migrate.jar -s source-repo.git -d target-repo.git -l http://test:test@lfs-server/ .psd .zip .bin
+   ```
 
 For example, you can convert bozaro/git-lfs-migrate to bozaro/git-lfs-migrate-converted by commands:
 
