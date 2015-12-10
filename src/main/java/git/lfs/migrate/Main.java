@@ -2,6 +2,7 @@ package git.lfs.migrate;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
+import org.apache.commons.httpclient.HttpStatus;
 import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 import org.jetbrains.annotations.NotNull;
@@ -15,7 +16,9 @@ import ru.bozaro.gitlfs.client.BatchUploader;
 import ru.bozaro.gitlfs.client.Client;
 import ru.bozaro.gitlfs.client.auth.AuthProvider;
 import ru.bozaro.gitlfs.client.auth.BasicAuthProvider;
-import ru.bozaro.gitlfs.common.data.Meta;
+import ru.bozaro.gitlfs.client.exceptions.ForbiddenException;
+import ru.bozaro.gitlfs.common.data.*;
+import ru.bozaro.gitlfs.common.data.Error;
 
 import java.io.File;
 import java.io.IOException;
@@ -57,8 +60,56 @@ public class Main {
     } else {
       auth = null;
     }
+    if (!checkLfsAuthenticate(auth)) {
+      return;
+    }
+    if (cmd.checkLfs) {
+      if (auth == null) {
+        log.error("Git LFS server is not defined.");
+      }
+      return;
+    }
     processRepository(cmd.src, cmd.dst, cmd.cache, auth, cmd.writeThreads, cmd.uploadThreads, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
     log.info("Convert time: {}", System.currentTimeMillis() - time);
+  }
+
+  private static boolean checkLfsAuthenticate(@Nullable AuthProvider auth) throws IOException {
+    if (auth == null)
+      return true;
+    final Meta meta = new Meta("0123456789012345678901234567890123456789012345678901234567890123", 42);
+    Client client = new Client(auth);
+    try {
+      BatchRes response = client.postBatch(
+          new BatchReq(Operation.Upload, Collections.singletonList(
+              meta
+          ))
+      );
+      if (response.getObjects().size() != 1) {
+        log.error("LFS server: Invalid response for test batch request");
+      }
+      Error error = response.getObjects().get(0).getError();
+      if (error != null) {
+        if (error.getCode() == HttpStatus.SC_FORBIDDEN) {
+          log.error("LFS server: Upload access denied");
+        } else {
+          log.error("LFS server: Upload denied with error: " + error.getMessage());
+        }
+      }
+      log.info("LFS server: OK");
+      return true;
+    } catch (ForbiddenException e) {
+      log.error("LFS server: Access denied", e);
+      return false;
+    } catch (IOException e) {
+      log.info("LFS server: Batch API request exception", e);
+    }
+    try {
+      client.getMeta(meta.getOid());
+      log.error("LFS server: Unsupported batch API");
+    } catch (IOException ignored) {
+      log.error("LFS server: Invalid base URL");
+    }
+    return false;
   }
 
   public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @NotNull File cachePath, @Nullable AuthProvider auth, int writeThreads, int uploadThreads, @NotNull String... suffixes) throws IOException, InterruptedException, ExecutionException {
@@ -366,11 +417,12 @@ public class Main {
     private int writeThreads = 2;
     @Parameter(names = {"-u", "--upload-threads"}, description = "HTTP upload thread count", required = false)
     private int uploadThreads = 4;
+    @Parameter(names = {"--check-lfs"}, description = "Check LFS server settings and exit")
+    private boolean checkLfs = false;
 
     @Parameter(description = "LFS file suffixes")
     @NotNull
     private List<String> suffixes = new ArrayList<>();
-
     @Parameter(names = {"-h", "--help"}, description = "Show help", help = true)
     private boolean help = false;
   }
