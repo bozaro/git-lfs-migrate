@@ -31,6 +31,9 @@ git clone --mirror git@github.com:bozaro/git-lfs-migrate.git
 #     -c, --cache
 #        Source repository
 #        Default: .
+#         --check-lfs
+#      Check LFS server settings and exit
+#      Default: false
 #   * -d, --destination
 #        Destination repository
 #     -g, --git
