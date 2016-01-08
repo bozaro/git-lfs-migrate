@@ -150,7 +150,7 @@ public class Main {
       for (Map.Entry<String, Ref> ref : srcRepo.getAllRefs().entrySet()) {
         RefUpdate refUpdate = dstRepo.updateRef(ref.getKey());
         final ObjectId oldId = ref.getValue().getObjectId();
-        final ObjectId newId = converted.get(new TaskKey(GitConverter.TaskType.Simple, oldId));
+        final ObjectId newId = converted.get(new TaskKey(GitConverter.TaskType.Simple, "", oldId));
         refUpdate.setNewObjectId(newId);
         refUpdate.update();
         log.info("  convert ref: {} -> {} ({})", oldId.getName(), newId.getName(), ref.getKey());
@@ -269,7 +269,7 @@ public class Main {
       final Deque<TaskKey> queue = new ArrayDeque<>();
       // Heads
       for (Ref ref : refs.values()) {
-        final TaskKey taskKey = new TaskKey(GitConverter.TaskType.Simple, ref.getObjectId());
+        final TaskKey taskKey = new TaskKey(GitConverter.TaskType.Simple, "", ref.getObjectId());
         if (graph.addVertex(taskKey)) {
           queue.add(taskKey);
           reporter.increment();
