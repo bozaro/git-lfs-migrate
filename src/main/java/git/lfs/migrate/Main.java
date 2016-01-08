@@ -3,6 +3,7 @@ package git.lfs.migrate;
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
 import org.apache.commons.httpclient.HttpStatus;
+import org.eclipse.jgit.errors.InvalidPatternException;
 import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 import org.jetbrains.annotations.NotNull;
@@ -43,7 +44,7 @@ public class Main {
   @NotNull
   private static final Logger log = LoggerFactory.getLogger(Main.class);
 
-  public static void main(@NotNull String[] args) throws IOException, InterruptedException, ExecutionException {
+  public static void main(@NotNull String[] args) throws IOException, InterruptedException, ExecutionException, InvalidPatternException {
     final CmdArgs cmd = new CmdArgs();
     final JCommander jc = new JCommander(cmd);
     jc.parse(args);
@@ -69,7 +70,7 @@ public class Main {
       }
       return;
     }
-    processRepository(cmd.src, cmd.dst, cmd.cache, auth, cmd.writeThreads, cmd.uploadThreads, cmd.suffixes.toArray(new String[cmd.suffixes.size()]));
+    processRepository(cmd.src, cmd.dst, cmd.cache, auth, cmd.writeThreads, cmd.uploadThreads, cmd.globs.toArray(new String[cmd.globs.size()]));
     log.info("Convert time: {}", System.currentTimeMillis() - time);
   }
 
@@ -112,7 +113,7 @@ public class Main {
     return false;
   }
 
-  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @NotNull File cachePath, @Nullable AuthProvider auth, int writeThreads, int uploadThreads, @NotNull String... suffixes) throws IOException, InterruptedException, ExecutionException {
+  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @NotNull File cachePath, @Nullable AuthProvider auth, int writeThreads, int uploadThreads, @NotNull String... globs) throws IOException, InterruptedException, ExecutionException, InvalidPatternException {
     removeDirectory(dstPath);
     dstPath.mkdirs();
 
@@ -123,7 +124,7 @@ public class Main {
         .setMustExist(false)
         .setGitDir(dstPath).build();
 
-    final GitConverter converter = new GitConverter(cachePath, dstPath, suffixes);
+    final GitConverter converter = new GitConverter(cachePath, dstPath, globs);
     try {
       dstRepo.create(true);
       // Load all revision list.
@@ -150,7 +151,7 @@ public class Main {
       for (Map.Entry<String, Ref> ref : srcRepo.getAllRefs().entrySet()) {
         RefUpdate refUpdate = dstRepo.updateRef(ref.getKey());
         final ObjectId oldId = ref.getValue().getObjectId();
-        final ObjectId newId = converted.get(new TaskKey(GitConverter.TaskType.Simple, oldId));
+        final ObjectId newId = converted.get(new TaskKey(GitConverter.TaskType.Simple, "", oldId));
         refUpdate.setNewObjectId(newId);
         refUpdate.update();
         log.info("  convert ref: {} -> {} ({})", oldId.getName(), newId.getName(), ref.getKey());
@@ -269,7 +270,7 @@ public class Main {
       final Deque<TaskKey> queue = new ArrayDeque<>();
       // Heads
       for (Ref ref : refs.values()) {
-        final TaskKey taskKey = new TaskKey(GitConverter.TaskType.Simple, ref.getObjectId());
+        final TaskKey taskKey = new TaskKey(GitConverter.TaskType.Simple, "", ref.getObjectId());
         if (graph.addVertex(taskKey)) {
           queue.add(taskKey);
           reporter.increment();
@@ -420,9 +421,9 @@ public class Main {
     @Parameter(names = {"--check-lfs"}, description = "Check LFS server settings and exit")
     private boolean checkLfs = false;
 
-    @Parameter(description = "LFS file suffixes")
+    @Parameter(description = "LFS file glob patterns")
     @NotNull
-    private List<String> suffixes = new ArrayList<>();
+    private List<String> globs = new ArrayList<>();
     @Parameter(names = {"-h", "--help"}, description = "Show help", help = true)
     private boolean help = false;
   }

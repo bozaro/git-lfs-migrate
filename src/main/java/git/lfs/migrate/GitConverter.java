@@ -1,6 +1,8 @@
 package git.lfs.migrate;
 
 import org.apache.commons.codec.binary.Hex;
+import org.eclipse.jgit.errors.InvalidPatternException;
+import org.eclipse.jgit.fnmatch.FileNameMatcher;
 import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.revwalk.*;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
@@ -31,7 +33,7 @@ public class GitConverter implements AutoCloseable {
   @NotNull
   private static final String GIT_ATTRIBUTES = ".gitattributes";
   @NotNull
-  private final String[] suffixes;
+  private final String[] globs;
   @NotNull
   private final File basePath;
   @NotNull
@@ -41,9 +43,14 @@ public class GitConverter implements AutoCloseable {
   @NotNull
   private final HTreeMap<String, String> cacheSha256;
 
-  public GitConverter(@NotNull File cachePath, @NotNull File basePath, @NotNull String[] suffixes) throws IOException {
+  public GitConverter(@NotNull File cachePath, @NotNull File basePath, @NotNull String[] globs) throws IOException, InvalidPatternException {
     this.basePath = basePath;
-    this.suffixes = suffixes.clone();
+    this.globs = globs.clone();
+    Arrays.sort(globs);
+
+    for (String glob : globs) {
+      new FileNameMatcher(glob, '/');
+    }
 
     tempPath = new File(basePath, "lfs/tmp");
     makeParentDirs(tempPath);
@@ -73,20 +80,13 @@ public class GitConverter implements AutoCloseable {
           return convertCommitTask((RevCommit) revObject);
         }
         if (revObject instanceof RevTree) {
-          return convertTreeTask(reader, revObject, false);
+          return convertTreeTask(reader, revObject, Objects.requireNonNull(key.getPath()));
         }
         if (revObject instanceof RevBlob) {
           return copyTask(reader, revObject);
         }
         if (revObject instanceof RevTag) {
           return convertTagTask((RevTag) revObject);
-        }
-        throw new IllegalStateException("Unsupported object type: " + key + " (" + revObject.getClass().getName() + ")");
-      }
-      case Root: {
-        final RevObject revObject = new RevWalk(reader).parseAny(key.getObjectId());
-        if (revObject instanceof RevTree) {
-          return convertTreeTask(reader, revObject, true);
         }
         throw new IllegalStateException("Unsupported object type: " + key + " (" + revObject.getClass().getName() + ")");
       }
@@ -122,14 +122,14 @@ public class GitConverter implements AutoCloseable {
       @Override
       public Iterable<TaskKey> depends() {
         return Collections.singletonList(
-            new TaskKey(TaskType.Simple, revObject.getObject())
+            new TaskKey(TaskType.Simple, "", revObject.getObject())
         );
       }
 
       @NotNull
       @Override
       public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
-        final ObjectId id = resolver.resolve(TaskType.Simple, revObject.getObject());
+        final ObjectId id = resolver.resolve(TaskType.Simple, "", revObject.getObject());
         final TagBuilder builder = new TagBuilder();
         builder.setMessage(revObject.getFullMessage());
         builder.setTag(revObject.getTagName());
@@ -148,9 +148,9 @@ public class GitConverter implements AutoCloseable {
       public Iterable<TaskKey> depends() {
         List<TaskKey> result = new ArrayList<>();
         for (RevCommit parent : revObject.getParents()) {
-          result.add(new TaskKey(TaskType.Simple, parent));
+          result.add(new TaskKey(TaskType.Simple, "", parent));
         }
-        result.add(new TaskKey(TaskType.Root, revObject.getTree()));
+        result.add(new TaskKey(TaskType.Simple, "", revObject.getTree()));
         return result;
       }
 
@@ -164,39 +164,43 @@ public class GitConverter implements AutoCloseable {
         builder.setMessage(revObject.getFullMessage());
         // Set parents
         for (RevCommit oldParent : revObject.getParents()) {
-          builder.addParentId(resolver.resolve(TaskType.Simple, oldParent));
+          builder.addParentId(resolver.resolve(TaskType.Simple, "", oldParent));
         }
         // Set tree
-        builder.setTreeId(resolver.resolve(TaskType.Root, revObject.getTree()));
+        builder.setTreeId(resolver.resolve(TaskType.Simple, "", revObject.getTree()));
         return inserter.insert(builder);
       }
     };
   }
 
   @NotNull
-  private ConvertTask convertTreeTask(@NotNull ObjectReader reader, @NotNull ObjectId id, boolean rootTree) {
+  private ConvertTask convertTreeTask(@NotNull ObjectReader reader, @NotNull ObjectId id, @NotNull String path) {
     return new ConvertTask() {
       @NotNull
       private List<GitTreeEntry> getEntries() throws IOException {
         final List<GitTreeEntry> entries = new ArrayList<>();
         final CanonicalTreeParser treeParser = new CanonicalTreeParser(null, reader, id);
-        boolean needAttributes = rootTree;
+        boolean needAttributes = path.isEmpty();
         while (!treeParser.eof()) {
           final FileMode fileMode = treeParser.getEntryFileMode();
           final TaskType blobTask;
+          final String pathTask;
           if (needAttributes && treeParser.getEntryPathString().equals(GIT_ATTRIBUTES)) {
             blobTask = TaskType.Attribute;
+            pathTask = null;
             needAttributes = false;
-          } else if (isFile(fileMode) && matchFilename(treeParser.getEntryPathString())) {
+          } else if (isFile(fileMode) && matchFilename(path + "/" + treeParser.getEntryPathString())) {
             blobTask = TaskType.UploadLfs;
+            pathTask = null;
           } else {
             blobTask = TaskType.Simple;
+            pathTask = path + "/" + treeParser.getEntryPathString();
           }
-          entries.add(new GitTreeEntry(fileMode, new TaskKey(blobTask, treeParser.getEntryObjectId()), treeParser.getEntryPathString()));
+          entries.add(new GitTreeEntry(fileMode, new TaskKey(blobTask, pathTask, treeParser.getEntryObjectId()), treeParser.getEntryPathString()));
           treeParser.next();
         }
-        if (needAttributes && suffixes.length > 0) {
-          entries.add(new GitTreeEntry(FileMode.REGULAR_FILE, new TaskKey(TaskType.Attribute, ObjectId.zeroId()), GIT_ATTRIBUTES));
+        if (needAttributes && globs.length > 0) {
+          entries.add(new GitTreeEntry(FileMode.REGULAR_FILE, new TaskKey(TaskType.Attribute, null, ObjectId.zeroId()), GIT_ATTRIBUTES));
         }
         return entries;
       }
@@ -228,12 +232,21 @@ public class GitConverter implements AutoCloseable {
   }
 
   private boolean matchFilename(@NotNull String fileName) {
-    for (String suffix : suffixes) {
-      if (fileName.endsWith(suffix)) {
-        return true;
-      }
+    if (!fileName.startsWith("/")) {
+      throw new IllegalStateException("Unexpected file name: " + fileName);
     }
-    return false;
+    try {
+      for (String glob : globs) {
+        final FileNameMatcher matcher = new FileNameMatcher(glob, null);
+        matcher.append(fileName.substring(1));
+        if (matcher.isMatch()) {
+          return true;
+        }
+      }
+      return false;
+    } catch (InvalidPatternException e) {
+      throw new IllegalArgumentException(e);
+    }
   }
 
   @NotNull
@@ -358,8 +371,8 @@ public class GitConverter implements AutoCloseable {
       @Override
       public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final Set<String> attributes = new TreeSet<>();
-        for (String suffix : suffixes) {
-          attributes.add("*" + suffix + "\tfilter=lfs diff=lfs merge=lfs -crlf");
+        for (String glob : globs) {
+          attributes.add(glob + "\tfilter=lfs diff=lfs merge=lfs -crlf");
         }
         final ByteArrayOutputStream blob = new ByteArrayOutputStream();
         try (BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(openAttributes(reader, id), StandardCharsets.UTF_8))) {
@@ -410,7 +423,19 @@ public class GitConverter implements AutoCloseable {
   }
 
   public enum TaskType {
-    Simple, Root, Attribute, UploadLfs,
+    Simple(true),
+    Attribute(false),
+    UploadLfs(false);
+
+    TaskType(boolean needPath) {
+      this.needPath = needPath;
+    }
+
+    private final boolean needPath;
+
+    public boolean needPath() {
+      return needPath;
+    }
   }
 
   public interface ConvertResolver {
@@ -418,8 +443,8 @@ public class GitConverter implements AutoCloseable {
     ObjectId resolve(@NotNull TaskKey key);
 
     @NotNull
-    default ObjectId resolve(@NotNull TaskType type, @NotNull ObjectId objectId) {
-      return resolve(new TaskKey(type, objectId));
+    default ObjectId resolve(@NotNull TaskType type, @Nullable String path, @NotNull ObjectId objectId) {
+      return resolve(new TaskKey(type, path, objectId));
     }
   }
 
