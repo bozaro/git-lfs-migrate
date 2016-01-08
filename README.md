@@ -15,7 +15,7 @@ For quick run you need:
  * After unpacking archive you can run server executing:
 
    ```bash
-   java -jar build/deploy/git-lfs-migrate.jar -s source-repo.git -d target-repo.git -l http://test:test@lfs-server/ .psd .zip .bin
+   java -jar build/deploy/git-lfs-migrate.jar -s source-repo.git -d target-repo.git -l http://test:test@lfs-server/ "*.psd" "*.zip" "*.bin"
    ```
 
 For example, you can convert bozaro/git-lfs-migrate to bozaro/git-lfs-migrate-converted by commands:
@@ -27,7 +27,7 @@ git clone --mirror git@github.com:bozaro/git-lfs-migrate.git
 
 # Convert repository with moving .md and .jar file to LFS
 #
-# Usage: <main class> [options] LFS file suffixes
+# Usage: <main class> [options] LFS file glob patterns
 #   Options:
 #     -c, --cache
 #        Source repository
@@ -56,8 +56,8 @@ java -jar git-lfs-migrate.jar \
      -s git-lfs-migrate.git \
      -d git-lfs-migrate-converted.git \
      -g git@github.com:bozaro/git-lfs-migrate-converted.git \
-     .md \
-     .jar
+     "*.md" \
+     "*.jar"
 
 # Push coverted repository to new repository
 cd git-lfs-migrate-converted.git
@@ -101,5 +101,5 @@ call gradlew.bat deployZip
 When build completes you can convert repository executing:
 
 ```bash
-java -jar build/deploy/git-lfs-migrate.jar -s source-repo.git -d target-repo.git -l http://test:test@lfs-server/ .psd .zip .bin
+java -jar build/deploy/git-lfs-migrate.jar -s source-repo.git -d target-repo.git -l http://test:test@lfs-server/ "*.psd" "*.zip" "*.bin"
 ```

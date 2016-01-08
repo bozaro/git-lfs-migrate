@@ -1,6 +1,8 @@
 package git.lfs.migrate;
 
 import org.apache.commons.codec.binary.Hex;
+import org.eclipse.jgit.errors.InvalidPatternException;
+import org.eclipse.jgit.fnmatch.FileNameMatcher;
 import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.revwalk.*;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
@@ -31,7 +33,7 @@ public class GitConverter implements AutoCloseable {
   @NotNull
   private static final String GIT_ATTRIBUTES = ".gitattributes";
   @NotNull
-  private final String[] suffixes;
+  private final String[] globs;
   @NotNull
   private final File basePath;
   @NotNull
@@ -41,9 +43,14 @@ public class GitConverter implements AutoCloseable {
   @NotNull
   private final HTreeMap<String, String> cacheSha256;
 
-  public GitConverter(@NotNull File cachePath, @NotNull File basePath, @NotNull String[] suffixes) throws IOException {
+  public GitConverter(@NotNull File cachePath, @NotNull File basePath, @NotNull String[] globs) throws IOException, InvalidPatternException {
     this.basePath = basePath;
-    this.suffixes = suffixes.clone();
+    this.globs = globs.clone();
+    Arrays.sort(globs);
+
+    for (String glob : globs) {
+      new FileNameMatcher(glob, '/');
+    }
 
     tempPath = new File(basePath, "lfs/tmp");
     makeParentDirs(tempPath);
@@ -182,7 +189,7 @@ public class GitConverter implements AutoCloseable {
             blobTask = TaskType.Attribute;
             pathTask = null;
             needAttributes = false;
-          } else if (isFile(fileMode) && matchFilename(treeParser.getEntryPathString())) {
+          } else if (isFile(fileMode) && matchFilename(path + "/" + treeParser.getEntryPathString())) {
             blobTask = TaskType.UploadLfs;
             pathTask = null;
           } else {
@@ -192,7 +199,7 @@ public class GitConverter implements AutoCloseable {
           entries.add(new GitTreeEntry(fileMode, new TaskKey(blobTask, pathTask, treeParser.getEntryObjectId()), treeParser.getEntryPathString()));
           treeParser.next();
         }
-        if (needAttributes && suffixes.length > 0) {
+        if (needAttributes && globs.length > 0) {
           entries.add(new GitTreeEntry(FileMode.REGULAR_FILE, new TaskKey(TaskType.Attribute, null, ObjectId.zeroId()), GIT_ATTRIBUTES));
         }
         return entries;
@@ -225,12 +232,21 @@ public class GitConverter implements AutoCloseable {
   }
 
   private boolean matchFilename(@NotNull String fileName) {
-    for (String suffix : suffixes) {
-      if (fileName.endsWith(suffix)) {
-        return true;
-      }
+    if (!fileName.startsWith("/")) {
+      throw new IllegalStateException("Unexpected file name: " + fileName);
     }
-    return false;
+    try {
+      for (String glob : globs) {
+        final FileNameMatcher matcher = new FileNameMatcher(glob, null);
+        matcher.append(fileName.substring(1));
+        if (matcher.isMatch()) {
+          return true;
+        }
+      }
+      return false;
+    } catch (InvalidPatternException e) {
+      throw new IllegalArgumentException(e);
+    }
   }
 
   @NotNull
@@ -355,8 +371,8 @@ public class GitConverter implements AutoCloseable {
       @Override
       public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final Set<String> attributes = new TreeSet<>();
-        for (String suffix : suffixes) {
-          attributes.add("*" + suffix + "\tfilter=lfs diff=lfs merge=lfs -crlf");
+        for (String glob : globs) {
+          attributes.add(glob + "\tfilter=lfs diff=lfs merge=lfs -crlf");
         }
         final ByteArrayOutputStream blob = new ByteArrayOutputStream();
         try (BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(openAttributes(reader, id), StandardCharsets.UTF_8))) {
