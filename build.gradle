@@ -1,7 +1,10 @@
 buildscript {
   repositories {
-    mavenLocal()
-    mavenCentral()
+    jcenter()
+  }
+
+  dependencies {
+    classpath "com.github.ben-manes:gradle-versions-plugin:0.12.0"
   }
 }
 
@@ -16,19 +19,20 @@ repositories {
 
 apply plugin: "idea"
 apply plugin: "java"
+apply plugin: "com.github.ben-manes.versions"
 
 dependencies {
-  compile "org.jetbrains:annotations:13.0"
-  compile "org.eclipse.jgit:org.eclipse.jgit:3.6.2.201501210735-r"
-  compile "org.mapdb:mapdb:1.0.6"
-  compile "org.slf4j:slf4j-simple:1.7.7"
+  compile "org.jetbrains:annotations:15.0"
+  compile "org.eclipse.jgit:org.eclipse.jgit:4.1.1.201511131810-r"
+  compile "org.mapdb:mapdb:1.0.8"
+  compile "org.slf4j:slf4j-simple:1.7.13"
   compile "org.jgrapht:jgrapht-core:0.9.1"
-  compile "com.beust:jcommander:1.35"
+  compile "com.beust:jcommander:1.48"
 
-  compile "ru.bozaro.gitlfs:gitlfs-pointer:0.9.0-SNAPSHOT"
-  compile "ru.bozaro.gitlfs:gitlfs-client:0.9.0-SNAPSHOT"
+  compile "ru.bozaro.gitlfs:gitlfs-pointer:0.9.0"
+  compile "ru.bozaro.gitlfs:gitlfs-client:0.9.0"
 
-  testCompile "org.testng:testng:6.8.8"
+  testCompile "org.testng:testng:6.9.10"
 }
 
 sourceCompatibility = JavaVersion.VERSION_1_8

@@ -2,7 +2,10 @@ package git.lfs.migrate;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
-import org.apache.commons.httpclient.HttpStatus;
+import org.apache.http.HttpStatus;
+import org.apache.http.impl.client.HttpClientBuilder;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.ssl.SSLContexts;
 import org.eclipse.jgit.errors.InvalidPatternException;
 import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
@@ -29,6 +32,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.security.GeneralSecurityException;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -44,7 +48,7 @@ public class Main {
   @NotNull
   private static final Logger log = LoggerFactory.getLogger(Main.class);
 
-  public static void main(@NotNull String[] args) throws IOException, InterruptedException, ExecutionException, InvalidPatternException {
+  public static void main(@NotNull String[] args) throws Exception {
     final CmdArgs cmd = new CmdArgs();
     final JCommander jc = new JCommander(cmd);
     jc.parse(args);
@@ -53,32 +57,43 @@ public class Main {
       return;
     }
     final long time = System.currentTimeMillis();
-    final AuthProvider auth;
+    final Client client;
     if (cmd.lfs != null) {
-      auth = new BasicAuthProvider(URI.create(cmd.lfs));
+      client = createClient(new BasicAuthProvider(URI.create(cmd.lfs)), cmd);
     } else if (cmd.git != null) {
-      auth = AuthHelper.create(cmd.git);
+      client = createClient(AuthHelper.create(cmd.git), cmd);
     } else {
-      auth = null;
+      client = null;
     }
-    if (!checkLfsAuthenticate(auth)) {
+    if (!checkLfsAuthenticate(client)) {
       return;
     }
     if (cmd.checkLfs) {
-      if (auth == null) {
+      if (client == null) {
         log.error("Git LFS server is not defined.");
       }
       return;
     }
-    processRepository(cmd.src, cmd.dst, cmd.cache, auth, cmd.writeThreads, cmd.uploadThreads, cmd.globs.toArray(new String[cmd.globs.size()]));
+    processRepository(cmd.src, cmd.dst, cmd.cache, client, cmd.writeThreads, cmd.uploadThreads, cmd.globs.toArray(new String[cmd.globs.size()]));
     log.info("Convert time: {}", System.currentTimeMillis() - time);
   }
 
-  private static boolean checkLfsAuthenticate(@Nullable AuthProvider auth) throws IOException {
-    if (auth == null)
+  @NotNull
+  private static Client createClient(@NotNull AuthProvider auth, @NotNull CmdArgs cmd) throws GeneralSecurityException {
+    final HttpClientBuilder httpBuilder = HttpClients.custom();
+    if (cmd.noCheckCertificate) {
+      httpBuilder.setSSLHostnameVerifier((hostname, session) -> true);
+      httpBuilder.setSSLContext(SSLContexts.custom()
+          .loadTrustMaterial((chain, authType) -> true)
+          .build());
+    }
+    return new Client(auth, httpBuilder.build());
+  }
+
+  private static boolean checkLfsAuthenticate(@Nullable Client client) throws IOException {
+    if (client == null)
       return true;
     final Meta meta = new Meta("0123456789012345678901234567890123456789012345678901234567890123", 42);
-    Client client = new Client(auth);
     try {
       BatchRes response = client.postBatch(
           new BatchReq(Operation.Upload, Collections.singletonList(
@@ -113,7 +128,7 @@ public class Main {
     return false;
   }
 
-  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @NotNull File cachePath, @Nullable AuthProvider auth, int writeThreads, int uploadThreads, @NotNull String... globs) throws IOException, InterruptedException, ExecutionException, InvalidPatternException {
+  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @NotNull File cachePath, @Nullable Client client, int writeThreads, int uploadThreads, @NotNull String... globs) throws IOException, InterruptedException, ExecutionException, InvalidPatternException {
     removeDirectory(dstPath);
     dstPath.mkdirs();
 
@@ -135,7 +150,7 @@ public class Main {
 
       final ConcurrentMap<TaskKey, ObjectId> converted = new ConcurrentHashMap<>();
       log.info("Converting object without dependencies in " + writeThreads + " threads...", totalObjects);
-      try (HttpUploader uploader = createHttpUploader(srcRepo, auth, uploadThreads)) {
+      try (HttpUploader uploader = createHttpUploader(srcRepo, client, uploadThreads)) {
         processMultipleThreads(converter, graph, srcRepo, dstRepo, converted, uploader, writeThreads);
       }
 
@@ -163,8 +178,8 @@ public class Main {
   }
 
   @Nullable
-  private static HttpUploader createHttpUploader(@NotNull Repository repository, @Nullable AuthProvider auth, int uploadThreads) {
-    return auth == null ? null : new HttpUploader(repository, auth, uploadThreads);
+  private static HttpUploader createHttpUploader(@NotNull Repository repository, @Nullable Client client, int uploadThreads) {
+    return client == null ? null : new HttpUploader(repository, client, uploadThreads);
   }
 
   private static void processMultipleThreads(@NotNull GitConverter converter, @NotNull SimpleDirectedGraph<TaskKey, DefaultEdge> graph, @NotNull Repository srcRepo, @NotNull Repository dstRepo, @NotNull ConcurrentMap<TaskKey, ObjectId> converted, @Nullable HttpUploader uploader, int threads) throws IOException, InterruptedException {
@@ -317,9 +332,9 @@ public class Main {
     @NotNull
     private final AtomicInteger total = new AtomicInteger();
 
-    public HttpUploader(@NotNull Repository repository, @NotNull AuthProvider auth, int threads) {
+    public HttpUploader(@NotNull Repository repository, @NotNull Client client, int threads) {
       this.pool = Executors.newFixedThreadPool(threads);
-      this.uploader = new BatchUploader(new Client(auth), pool);
+      this.uploader = new BatchUploader(client, pool);
       this.repository = repository;
     }
 
@@ -420,6 +435,8 @@ public class Main {
     private int uploadThreads = 4;
     @Parameter(names = {"--check-lfs"}, description = "Check LFS server settings and exit")
     private boolean checkLfs = false;
+    @Parameter(names = {"--no-check-certificate"}, description = "Don't check the server certificate against the available certificate authorities")
+    private boolean noCheckCertificate = false;
 
     @Parameter(description = "LFS file glob patterns")
     @NotNull
@@ -427,5 +444,4 @@ public class Main {
     @Parameter(names = {"-h", "--help"}, description = "Show help", help = true)
     private boolean help = false;
   }
-
 }
