@@ -1,10 +1,8 @@
 node {
   stage 'Checkout'
-  checkout ([
-    $class: 'GitSCM',
-    userRemoteConfigs: [[url: 'https://github.com/bozaro/git-lfs-migrate.git']],
-    extensions: [[$class: 'CleanCheckout']]
-  ])
+  checkout scm
+  sh 'git reset --hard'
+  sh 'git clean -ffdx'
 
   stage 'Build'
   sh './gradlew assemble deployZip'
