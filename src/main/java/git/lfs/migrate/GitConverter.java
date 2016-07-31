@@ -41,7 +41,7 @@ public class GitConverter implements AutoCloseable {
   @NotNull
   private final DB cache;
   @NotNull
-  private final HTreeMap<String, String> cacheSha256;
+  private final HTreeMap<String, MetaData> cacheMeta;
 
   public GitConverter(@NotNull File cachePath, @NotNull File basePath, @NotNull String[] globs) throws IOException, InvalidPatternException {
     this.basePath = basePath;
@@ -60,7 +60,7 @@ public class GitConverter implements AutoCloseable {
         .mmapFileEnable()
         .cacheSoftRefEnable()
         .make();
-    cacheSha256 = cache.getHashMap("sha256");
+    cacheMeta = cache.getHashMap("meta");
   }
 
   @Override
@@ -283,7 +283,7 @@ public class GitConverter implements AutoCloseable {
   private String createRemoteFile(@NotNull ObjectId id, @NotNull ObjectLoader loader, @NotNull Uploader uploader) throws IOException {
     // Create LFS stream.
     final String hash;
-    final String cached = cacheSha256.get(id.name());
+    final MetaData cached = cacheMeta.get(id.name());
     long size = 0;
     if (cached == null) {
       final MessageDigest md = createSha256();
@@ -297,10 +297,11 @@ public class GitConverter implements AutoCloseable {
         }
       }
       hash = new String(Hex.encodeHex(md.digest(), true));
-      cacheSha256.put(id.name(), hash);
+      cacheMeta.put(id.name(), new MetaData(hash, size));
       cache.commit();
     } else {
-      hash = cached;
+      hash = cached.oid;
+      size = cached.size;
     }
     uploader.upload(id, new Meta(hash, size));
     return hash;
@@ -311,18 +312,20 @@ public class GitConverter implements AutoCloseable {
     // Create LFS stream.
     final File tmpFile = new File(tempPath, UUID.randomUUID().toString());
     final MessageDigest md = createSha256();
+    int size = 0;
     try (InputStream istream = loader.openStream();
          OutputStream ostream = new FileOutputStream(tmpFile)) {
       byte[] buffer = new byte[0x10000];
       while (true) {
-        int size = istream.read(buffer);
-        if (size <= 0) break;
-        ostream.write(buffer, 0, size);
-        md.update(buffer, 0, size);
+        int read = istream.read(buffer);
+        if (read <= 0) break;
+        ostream.write(buffer, 0, read);
+        md.update(buffer, 0, read);
+        size += read;
       }
     }
     final String hash = new String(Hex.encodeHex(md.digest(), true));
-    cacheSha256.putIfAbsent(id.name(), hash);
+    cacheMeta.putIfAbsent(id.name(), new MetaData(hash, size));
     cache.commit();
     // Rename file.
     final File lfsFile = new File(basePath, "lfs/objects/" + hash.substring(0, 2) + "/" + hash.substring(2, 4) + "/" + hash);
@@ -459,5 +462,15 @@ public class GitConverter implements AutoCloseable {
   @FunctionalInterface
   public interface Uploader {
     void upload(@NotNull ObjectId oid, @NotNull Meta meta);
+  }
+
+  private static class MetaData implements Serializable {
+    private final String oid;
+    private final long size;
+
+    MetaData(String oid, long size) {
+      this.oid = oid;
+      this.size = size;
+    }
   }
 }
