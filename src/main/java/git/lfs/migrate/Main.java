@@ -81,6 +81,7 @@ public class Main {
   @NotNull
   private static Client createClient(@NotNull AuthProvider auth, @NotNull CmdArgs cmd) throws GeneralSecurityException {
     final HttpClientBuilder httpBuilder = HttpClients.custom();
+    httpBuilder.setUserAgent("git-lfs-migrate");
     if (cmd.noCheckCertificate) {
       httpBuilder.setSSLHostnameVerifier((hostname, session) -> true);
       httpBuilder.setSSLContext(SSLContexts.custom()
