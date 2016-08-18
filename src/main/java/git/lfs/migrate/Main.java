@@ -21,6 +21,7 @@ import ru.bozaro.gitlfs.client.Client;
 import ru.bozaro.gitlfs.client.auth.AuthProvider;
 import ru.bozaro.gitlfs.client.auth.BasicAuthProvider;
 import ru.bozaro.gitlfs.client.exceptions.ForbiddenException;
+import ru.bozaro.gitlfs.client.exceptions.RequestException;
 import ru.bozaro.gitlfs.common.data.*;
 import ru.bozaro.gitlfs.common.data.Error;
 
@@ -74,7 +75,15 @@ public class Main {
       }
       return;
     }
-    processRepository(cmd.src, cmd.dst, cmd.cache, client, cmd.writeThreads, cmd.uploadThreads, cmd.globs.toArray(new String[cmd.globs.size()]));
+    try {
+      processRepository(cmd.src, cmd.dst, cmd.cache, client, cmd.writeThreads, cmd.uploadThreads, cmd.globs.toArray(new String[cmd.globs.size()]));
+    } catch (ExecutionException e) {
+      if (e.getCause() instanceof RequestException) {
+        final RequestException cause = (RequestException) e.getCause();
+        log.error("HTTP request failure: {}", cause.getRequestInfo());
+      }
+      throw e;
+    }
     log.info("Convert time: {}", System.currentTimeMillis() - time);
   }
 
