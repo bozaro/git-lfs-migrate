@@ -35,6 +35,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.security.GeneralSecurityException;
 import java.util.*;
+import java.util.stream.Stream;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -75,8 +76,14 @@ public class Main {
       }
       return;
     }
+    String[] globs = cmd.globs.toArray(new String[cmd.globs.size()]);
+    if (cmd.globFile != null) {
+      globs = Stream.concat(
+          Arrays.stream(globs), Files.lines(cmd.globFile.toPath())
+        ).toArray(String[]::new);
+    }
     try {
-      processRepository(cmd.src, cmd.dst, cmd.cache, client, cmd.writeThreads, cmd.uploadThreads, cmd.globs.toArray(new String[cmd.globs.size()]));
+      processRepository(cmd.src, cmd.dst, cmd.cache, client, cmd.writeThreads, cmd.uploadThreads, globs);
     } catch (ExecutionException e) {
       if (e.getCause() instanceof RequestException) {
         final RequestException cause = (RequestException) e.getCause();
@@ -447,6 +454,8 @@ public class Main {
     private boolean checkLfs = false;
     @Parameter(names = {"--no-check-certificate"}, description = "Don't check the server certificate against the available certificate authorities")
     private boolean noCheckCertificate = false;
+    @Parameter(names = {"--glob-file"}, description = "File containing glob patterns")
+    private File globFile = null;
 
     @Parameter(description = "LFS file glob patterns")
     @NotNull

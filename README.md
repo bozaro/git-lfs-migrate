@@ -52,6 +52,8 @@ git clone --mirror git@github.com:bozaro/git-lfs-migrate.git
 #     -t, --write-threads
 #        IO thread count
 #        Default: 2
+#     --glob-file
+#        File containing glob patterns
 java -jar git-lfs-migrate.jar \
      -s git-lfs-migrate.git \
      -d git-lfs-migrate-converted.git \
