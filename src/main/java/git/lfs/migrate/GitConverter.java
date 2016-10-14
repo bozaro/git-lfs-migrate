@@ -262,10 +262,13 @@ public class GitConverter implements AutoCloseable {
       @Override
       public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final ObjectLoader loader = reader.open(id, Constants.OBJ_BLOB);
+        // Is empty blob (see #21)?
+        if (loader.getSize() == 0) {
+          return copy(inserter, loader);
+        }
         // Is object already converted?
         if (isLfsPointer(loader)) {
-          inserter.insert(loader.getType(), loader.getBytes());
-          return id;
+          return copy(inserter, loader);
         }
         final String hash = (uploader == null) ? createLocalFile(id, loader) : createRemoteFile(id, loader, uploader);
         // Create pointer.
@@ -277,6 +280,13 @@ public class GitConverter implements AutoCloseable {
         return inserter.insert(Constants.OBJ_BLOB, pointer.toString().getBytes(StandardCharsets.UTF_8));
       }
     };
+  }
+
+  @NotNull
+  private ObjectId copy(@NotNull ObjectInserter inserter, @NotNull ObjectLoader loader) throws IOException {
+    try (ObjectStream stream = loader.openStream()) {
+      return inserter.insert(loader.getType(), loader.getSize(), stream);
+    }
   }
 
   @NotNull
@@ -408,11 +418,7 @@ public class GitConverter implements AutoCloseable {
       @NotNull
       @Override
       public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
-        final ObjectLoader loader = reader.open(id);
-        try (ObjectStream stream = loader.openStream()) {
-          inserter.insert(loader.getType(), loader.getSize(), stream);
-        }
-        return id;
+        return copy(inserter, reader.open(id));
       }
     };
   }
