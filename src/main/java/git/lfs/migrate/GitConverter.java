@@ -262,6 +262,13 @@ public class GitConverter implements AutoCloseable {
       @Override
       public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final ObjectLoader loader = reader.open(id, Constants.OBJ_BLOB);
+        // Empty file is not converted.
+        if (loader.getSize() == 0) {
+          try (ObjectStream stream = loader.openStream()) {
+            inserter.insert(loader.getType(), loader.getSize(), stream);
+          }
+          return id;
+        }
         // Is object already converted?
         if (isLfsPointer(loader)) {
           inserter.insert(loader.getType(), loader.getBytes());
