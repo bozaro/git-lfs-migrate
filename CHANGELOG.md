@@ -1,5 +1,10 @@
 # Changes
 
+## 0.2.3
+
+ * Allow load globs from file (#19, thanks to @leth).
+ * Don't convert zero length file to a pointer file (#21, thanks to @kna).
+
 ## 0.2.2
 
  * Fix object size being 0 when retrying request (#14, #16, thanks to @robinst).
