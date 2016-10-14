@@ -35,11 +35,11 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.security.GeneralSecurityException;
 import java.util.*;
-import java.util.stream.Stream;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Stream;
 
 /**
  * Entry point.
@@ -78,9 +78,11 @@ public class Main {
     }
     String[] globs = cmd.globs.toArray(new String[cmd.globs.size()]);
     if (cmd.globFile != null) {
-      globs = Stream.concat(
-          Arrays.stream(globs), Files.lines(cmd.globFile.toPath())
-        ).toArray(String[]::new);
+      globs = Stream.concat(Arrays.stream(globs),
+          Files.lines(cmd.globFile.toPath())
+              .map(String::trim)
+              .filter(s -> !s.isEmpty())
+      ).toArray(String[]::new);
     }
     try {
       processRepository(cmd.src, cmd.dst, cmd.cache, client, cmd.writeThreads, cmd.uploadThreads, globs);
