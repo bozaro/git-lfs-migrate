@@ -13,6 +13,8 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jgrapht.graph.DefaultEdge;
 import org.jgrapht.graph.SimpleDirectedGraph;
+import org.mapdb.DB;
+import org.mapdb.DBMaker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.bozaro.gitlfs.client.AuthHelper;
@@ -25,13 +27,9 @@ import ru.bozaro.gitlfs.client.exceptions.RequestException;
 import ru.bozaro.gitlfs.common.data.*;
 import ru.bozaro.gitlfs.common.data.Error;
 
-import java.io.File;
 import java.io.IOException;
 import java.net.URI;
-import java.nio.file.FileVisitResult;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
+import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.security.GeneralSecurityException;
 import java.util.*;
@@ -79,7 +77,7 @@ public class Main {
     String[] globs = cmd.globs.toArray(new String[cmd.globs.size()]);
     if (cmd.globFile != null) {
       globs = Stream.concat(Arrays.stream(globs),
-          Files.lines(cmd.globFile.toPath())
+          Files.lines(cmd.globFile)
               .map(String::trim)
               .filter(s -> !s.isEmpty())
       ).toArray(String[]::new);
@@ -147,19 +145,21 @@ public class Main {
     return false;
   }
 
-  public static void processRepository(@NotNull File srcPath, @NotNull File dstPath, @NotNull File cachePath, @Nullable Client client, int writeThreads, int uploadThreads, @NotNull String... globs) throws IOException, InterruptedException, ExecutionException, InvalidPatternException {
+  public static void processRepository(@NotNull Path srcPath, @NotNull Path dstPath, @NotNull Path cachePath, @Nullable Client client, int writeThreads, int uploadThreads, @NotNull String... globs) throws IOException, InterruptedException, ExecutionException, InvalidPatternException {
     removeDirectory(dstPath);
-    dstPath.mkdirs();
+    Files.createDirectories(dstPath);
 
     final Repository srcRepo = new FileRepositoryBuilder()
         .setMustExist(true)
-        .setGitDir(srcPath).build();
+        .setGitDir(srcPath.toFile()).build();
     final Repository dstRepo = new FileRepositoryBuilder()
         .setMustExist(false)
-        .setGitDir(dstPath).build();
+        .setGitDir(dstPath.toFile()).build();
 
-    final GitConverter converter = new GitConverter(cachePath, dstPath, globs);
-    try {
+    try (DB cache = DBMaker.fileDB(cachePath.resolve("git-lfs-migrate.mapdb").toFile())
+        .fileMmapEnableIfSupported()
+        .make()) {
+      final GitConverter converter = new GitConverter(cache, dstPath, globs);
       dstRepo.create(true);
       // Load all revision list.
       log.info("Reading full objects list...");
@@ -279,9 +279,9 @@ public class Main {
     }
   }
 
-  private static void removeDirectory(@NotNull File path) throws IOException {
-    if (path.exists()) {
-      Files.walkFileTree(path.toPath(), new SimpleFileVisitor<Path>() {
+  private static void removeDirectory(@NotNull Path path) throws IOException {
+    if (Files.exists(path)) {
+      Files.walkFileTree(path, new SimpleFileVisitor<Path>() {
         @Override
         public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
           Files.delete(file);
@@ -435,13 +435,13 @@ public class Main {
   public static class CmdArgs {
     @Parameter(names = {"-s", "--source"}, description = "Source repository", required = true)
     @NotNull
-    private File src;
+    private Path src;
     @Parameter(names = {"-d", "--destination"}, description = "Destination repository", required = true)
     @NotNull
-    private File dst;
+    private Path dst;
     @Parameter(names = {"-c", "--cache"}, description = "Source repository", required = false)
     @NotNull
-    private File cache = new File(".");
+    private Path cache = FileSystems.getDefault().getPath(".");
     @Parameter(names = {"-g", "--git"}, description = "GIT repository url (ignored with --lfs parameter)", required = false)
     @Nullable
     private String git;
@@ -457,7 +457,7 @@ public class Main {
     @Parameter(names = {"--no-check-certificate"}, description = "Don't check the server certificate against the available certificate authorities")
     private boolean noCheckCertificate = false;
     @Parameter(names = {"--glob-file"}, description = "File containing glob patterns")
-    private File globFile = null;
+    private Path globFile = null;
 
     @Parameter(description = "LFS file glob patterns")
     @NotNull
