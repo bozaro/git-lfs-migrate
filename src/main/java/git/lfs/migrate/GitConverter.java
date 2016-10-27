@@ -1,11 +1,10 @@
 package git.lfs.migrate;
 
+import git.path.PathMatcher;
+import git.path.WildcardHelper;
 import org.apache.commons.codec.binary.Hex;
 import org.eclipse.jgit.errors.InvalidPatternException;
 import org.eclipse.jgit.fnmatch.FileNameMatcher;
-import org.eclipse.jgit.ignore.FastIgnoreRule;
-import org.eclipse.jgit.ignore.internal.IMatcher;
-import org.eclipse.jgit.ignore.internal.PathMatcher;
 import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.revwalk.*;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
@@ -42,9 +41,7 @@ public class GitConverter {
   @NotNull
   private final String[] globs;
   @NotNull
-  private final IMatcher[] matchers;
-  @NotNull
-  private final ThreadLocal<FileNameMatcher[]> threadMatchers = new ThreadLocal<>();
+  private final PathMatcher[] matchers;
   @NotNull
   private final DB cache;
   @NotNull
@@ -238,14 +235,14 @@ public class GitConverter {
   }
 
   @NotNull
-  private static IMatcher[] convertGlobs(String[] globs) throws InvalidPatternException {
-    final IMatcher[] matchers = new IMatcher[globs.length];
+  private static PathMatcher[] convertGlobs(String[] globs) throws InvalidPatternException {
+    final PathMatcher[] matchers = new PathMatcher[globs.length];
     for (int i = 0; i < globs.length; ++i) {
       String glob = globs[i];
       if (!glob.contains("/")) {
         glob = "**/" + glob;
       }
-      matchers[i] = PathMatcher.createPathMatcher(glob, FastIgnoreRule.PATH_SEPARATOR, false);
+      matchers[i] = WildcardHelper.createMatcher(glob);
     }
     return matchers;
   }
@@ -254,8 +251,8 @@ public class GitConverter {
     if (!fileName.startsWith("/")) {
       throw new IllegalStateException("Unexpected file name: " + fileName);
     }
-    for (IMatcher matcher : matchers) {
-      if (matcher.matches(fileName, false)) {
+    for (PathMatcher matcher : matchers) {
+      if (WildcardHelper.isMatch(matcher, fileName)) {
         return true;
       }
     }
