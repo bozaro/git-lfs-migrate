@@ -141,7 +141,7 @@ public class WildcardTest {
 
   @Test(dataProvider = "pathMatcherData")
   public static void pathMatcherTest(@NotNull String pattern, @NotNull String path, @Nullable Boolean expectedMatch) throws InvalidPatternException {
-    PathMatcher matcher = WildcardHelper.createMatcher(pattern);
+    PathMatcher matcher = WildcardHelper.createMatcher(pattern, false);
     for (String name : WildcardHelper.splitPattern(path)) {
       if (matcher == null) break;
       boolean isDir = name.endsWith("/");

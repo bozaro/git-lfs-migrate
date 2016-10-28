@@ -242,7 +242,7 @@ public class GitConverter {
       if (!glob.contains("/")) {
         glob = "**/" + glob;
       }
-      matchers[i] = WildcardHelper.createMatcher(glob);
+      matchers[i] = WildcardHelper.createMatcher(glob, true);
     }
     return matchers;
   }

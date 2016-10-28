@@ -20,13 +20,15 @@ public final class RecursivePathMatcher implements PathMatcher {
   private final int[] indexes;
   @NotNull
   private final NameMatcher[] nameMatchers;
+  private final boolean exact;
 
-  public RecursivePathMatcher(@NotNull NameMatcher[] nameMatchers) {
-    this(nameMatchers, START_ARRAY);
+  public RecursivePathMatcher(@NotNull NameMatcher[] nameMatchers, boolean exact) {
+    this(nameMatchers, exact, START_ARRAY);
   }
 
-  private RecursivePathMatcher(@NotNull NameMatcher[] nameMatchers, @NotNull int[] indexes) {
+  private RecursivePathMatcher(@NotNull NameMatcher[] nameMatchers, boolean exact, @NotNull int[] indexes) {
     this.nameMatchers = nameMatchers;
+    this.exact = exact;
     this.indexes = indexes;
   }
 
@@ -42,14 +44,14 @@ public final class RecursivePathMatcher implements PathMatcher {
           childs[count++] = index;
           if (nameMatchers[index + 1].isMatch(name, isDir)) {
             if (index + 2 == nameMatchers.length) {
-              return AlwaysMatcher.INSTANCE;
+              return exact && isDir ? null : AlwaysMatcher.INSTANCE;
             }
             childs[count++] = index + 2;
             changed = true;
           }
         } else {
           if (index + 1 == nameMatchers.length) {
-            return AlwaysMatcher.INSTANCE;
+            return exact && isDir ? null : AlwaysMatcher.INSTANCE;
           }
           childs[count++] = index + 1;
           changed = true;
@@ -64,7 +66,7 @@ public final class RecursivePathMatcher implements PathMatcher {
     if (!changed) {
       return this;
     }
-    return count == 0 ? null : new RecursivePathMatcher(nameMatchers, Arrays.copyOf(childs, count));
+    return count == 0 ? null : new RecursivePathMatcher(nameMatchers, exact, Arrays.copyOf(childs, count));
   }
 
   @Override

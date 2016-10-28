@@ -23,13 +23,13 @@ import java.util.List;
 public class WildcardHelper {
   public static final char PATH_SEPARATOR = '/';
 
-  @NotNull
-  public static PathMatcher createMatcher(@NotNull String pattern) throws InvalidPatternException {
+  @Nullable
+  public static PathMatcher createMatcher(@NotNull String pattern, boolean exact) throws InvalidPatternException {
     final NameMatcher[] nameMatchers = createNameMatchers(pattern);
     if (nameMatchers.length > 0) {
-      return new RecursivePathMatcher(nameMatchers);
+      return new RecursivePathMatcher(nameMatchers, exact);
     } else {
-      return AlwaysMatcher.INSTANCE;
+      return exact ? null : AlwaysMatcher.INSTANCE;
     }
   }
 
@@ -191,12 +191,12 @@ public class WildcardHelper {
   }
 
   public static boolean isMatch(@Nullable PathMatcher matcher, @NotNull String fileName) {
-    List<String> items = splitPattern(fileName);
+    List<String> items = splitPattern(fileName.substring(1));
     PathMatcher m = matcher;
-    int size = items.size();
-    for (int i = 0; i < size; ++i) {
+    for (String item : items) {
       if (m == null) break;
-      m = m.createChild(items.get(i), i < size - 1);
+      final boolean dir = item.endsWith(String.valueOf(PATH_SEPARATOR));
+      m = m.createChild(dir ? item.substring(0, item.length() - 1) : item, dir);
     }
     return (m != null) && m.isMatch();
   }
