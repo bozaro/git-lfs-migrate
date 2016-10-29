@@ -43,8 +43,8 @@ public class WildcardTest {
         // Simple mask
         new Object[]{"/", new String[0]},
         new Object[]{"*/", new String[]{"*/"}},
-        new Object[]{"*", new String[]{}},
-        new Object[]{"**", new String[]{}},
+        new Object[]{"*", new String[]{"**/", "*"}},
+        new Object[]{"**", new String[]{"**/", "*"}},
         new Object[]{"**/", new String[]{}},
         new Object[]{"foo", new String[]{"**/", "foo"}},
         new Object[]{"foo/", new String[]{"foo/"}},
@@ -67,9 +67,9 @@ public class WildcardTest {
         new Object[]{"foo/**/*/**/*/**.bar", new String[]{"foo/", "*/", "*/", "**/", "*.bar"}},
 
         // Collapse trailing masks
-        new Object[]{"foo/**", new String[]{"foo/"}},
-        new Object[]{"foo/**/*", new String[]{"foo/"}},
-        new Object[]{"foo/**/*/*", new String[]{"foo/", "*/"}},
+        new Object[]{"foo/**", new String[]{"foo/", "**/", "*"}},
+        new Object[]{"foo/**/*", new String[]{"foo/", "**/", "*"}},
+        new Object[]{"foo/**/*/*", new String[]{"foo/", "*/", "**/", "*"}},
         new Object[]{"foo/**/", new String[]{"foo/"}},
         new Object[]{"foo/**/*/", new String[]{"foo/", "*/"}},
         new Object[]{"foo/**/*/*/", new String[]{"foo/", "*/", "*/"}},

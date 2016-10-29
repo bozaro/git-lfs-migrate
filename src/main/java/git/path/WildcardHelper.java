@@ -168,7 +168,7 @@ public class WildcardHelper {
     // Remove tailing "**/" and "*"
     while (!tokens.isEmpty()) {
       final String token = tokens.get(tokens.size() - 1);
-      if (token.equals("**/") || token.equals("*")) {
+      if (token.equals("**/")) {
         tokens.remove(tokens.size() - 1);
       } else {
         break;
