@@ -39,19 +39,23 @@ public final class RecursivePathMatcher implements PathMatcher {
     boolean changed = false;
     int count = 0;
     for (int index : indexes) {
-      if (nameMatchers[index].isMatch(name, isDir)) {
+      if (index < nameMatchers.length && nameMatchers[index].isMatch(name, isDir)) {
         if (nameMatchers[index].isRecursive()) {
           childs[count++] = index;
           if (nameMatchers[index + 1].isMatch(name, isDir)) {
             if (index + 2 == nameMatchers.length) {
-              return exact && isDir ? null : AlwaysMatcher.INSTANCE;
+              if (!exact || !isDir) {
+                return AlwaysMatcher.INSTANCE;
+              }
             }
             childs[count++] = index + 2;
             changed = true;
           }
         } else {
           if (index + 1 == nameMatchers.length) {
-            return exact && isDir ? null : AlwaysMatcher.INSTANCE;
+            if (!exact || !isDir) {
+              return AlwaysMatcher.INSTANCE;
+            }
           }
           childs[count++] = index + 1;
           changed = true;
@@ -71,6 +75,11 @@ public final class RecursivePathMatcher implements PathMatcher {
 
   @Override
   public boolean isMatch() {
+    for (int index : indexes) {
+      if (index == nameMatchers.length) {
+        return true;
+      }
+    }
     return false;
   }
 
