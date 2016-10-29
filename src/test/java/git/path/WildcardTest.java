@@ -1,12 +1,18 @@
 package git.path;
 
+import com.google.common.io.ByteStreams;
 import org.eclipse.jgit.errors.InvalidPatternException;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.testng.Assert;
+import org.testng.SkipException;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -82,66 +88,100 @@ public class WildcardTest {
   public static Object[][] pathMatcherData() {
     return new Object[][]{
         // Simple pattern
-        new Object[]{"/", "foo/bar", true},
-        new Object[]{"*", "foo/bar", true},
-        new Object[]{"*/", "foo/bar", true},
-        new Object[]{"/", "foo/bar/", true},
-        new Object[]{"*", "foo/bar/", true},
-        new Object[]{"*/", "foo/bar/", true},
-        new Object[]{"**/", "foo/bar/", true},
-        new Object[]{"foo/**/", "foo/bar/", true},
-        new Object[]{"foo/**/", "foo/bar/xxx", true},
-        new Object[]{"foo/**/", "foo/bar/xxx/", true},
-        new Object[]{"f*o", "foo/bar", true},
-        new Object[]{"/f*o", "foo/bar", true},
-        new Object[]{"f*o/", "foo/bar", true},
-        new Object[]{"foo/", "foo/bar", true},
-        new Object[]{"/foo/", "foo/bar", true},
-        new Object[]{"/foo", "foo/", true},
-        new Object[]{"foo", "foo/", true},
-        new Object[]{"foo/", "foo/", true},
-        new Object[]{"foo/", "foo", null},
-        new Object[]{"bar", "foo/bar", true},
-        new Object[]{"b*r", "foo/bar", true},
-        new Object[]{"/bar", "foo/bar", null},
-        new Object[]{"bar/", "foo/bar", null},
-        new Object[]{"b*r/", "foo/bar", null},
-        new Object[]{"bar/", "foo/bar/", null},
-        new Object[]{"b*r/", "foo/bar/", null},
-        new Object[]{"b[a-z]r", "foo/bar", true},
-        new Object[]{"b[a-z]r", "foo/b0r", null},
-        new Object[]{"b[a-z]r", "foo/b0r/", false},
-        new Object[]{"/t*e*t", "test", true},
+        new Object[]{"/", "foo/bar", true, null},
+        new Object[]{"*", "foo/bar", true, true},
+        new Object[]{"*/", "foo/bar", true, null},
+        new Object[]{"/", "foo/bar/", true, null},
+        new Object[]{"*", "foo/bar/", true, true},
+        new Object[]{"*/", "foo/bar/", true, true},
+        new Object[]{"**/", "foo/bar/", true, true},
+        new Object[]{"foo/**/", "foo/bar/", true, true},
+        new Object[]{"foo/**/", "foo/bar/xxx", true, null},
+        new Object[]{"foo/**/", "foo/bar/xxx/", true, true},
+        new Object[]{"f*o", "foo/bar", true, null},
+        new Object[]{"/f*o", "foo/bar", true, null},
+        new Object[]{"f*o/", "foo/bar", true, null},
+        new Object[]{"foo/", "foo/bar", true, null},
+        new Object[]{"/foo/", "foo/bar", true, null},
+        new Object[]{"/foo", "foo/", true, true},
+        new Object[]{"foo", "foo/", true, true},
+        new Object[]{"foo/", "foo/", true, true},
+        new Object[]{"foo/", "foo", null, null},
+        new Object[]{"bar", "foo/bar", true, true},
+        new Object[]{"b*r", "foo/bar", true, true},
+        new Object[]{"/bar", "foo/bar", null, null},
+        new Object[]{"bar/", "foo/bar", null, null},
+        new Object[]{"b*r/", "foo/bar", null, null},
+        new Object[]{"bar/", "foo/bar/", null, true},
+        new Object[]{"b*r/", "foo/bar/", null, true},
+        new Object[]{"b[a-z]r", "foo/bar", true, true},
+        new Object[]{"b[a-z]r", "foo/b0r", null, null},
+        new Object[]{"b[a-z]r", "foo/b0r/", false, false},
+        new Object[]{"/t*e*t", "test", true, true},
         // More complex pattern
-        new Object[]{"foo/*/bar/", "foo/bar/", false},
-        new Object[]{"foo/*/bar/", "bar/", null},
-        new Object[]{"foo/*/bar/", "foo/a/bar/", true},
-        new Object[]{"foo/*/bar/", "foo/a/b/bar/", null},
-        new Object[]{"foo/*/*/bar/", "foo/a/b/bar/", true},
+        new Object[]{"foo/*/bar/", "foo/bar/", false, false},
+        new Object[]{"foo/*/bar/", "bar/", null, null},
+        new Object[]{"foo/*/bar/", "foo/a/bar/", true, true},
+        new Object[]{"foo/*/bar/", "foo/a/b/bar/", null, null},
+        new Object[]{"foo/*/*/bar/", "foo/a/b/bar/", true, true},
 
-        new Object[]{"foo/**/bar/a/", "foo/bar/b/bar/a/", true},
-        new Object[]{"foo/**/bar/a/", "foo/bar/bar/bar/a/", true},
-        new Object[]{"foo/**/bar/a/", "foo/bar/bar/b/a/", false},
-        new Object[]{"foo/**/bar/", "foo/bar/", true},
-        new Object[]{"foo/**/bar/", "bar/", null},
-        new Object[]{"foo/**/bar/", "foo/a/bar/", true},
-        new Object[]{"foo/**/bar/", "foo/a/b/bar/", true},
-        new Object[]{"foo/*/**/*/bar/", "foo/a/bar/", false},
-        new Object[]{"foo/*/**/*/bar/", "foo/a/b/bar/", true},
-        new Object[]{"foo/*/**/*/bar/", "foo/a/b/c/bar/", true},
-        new Object[]{"foo/**/xxx/**/bar/", "foo/xxx/bar/", true},
-        new Object[]{"foo/**/xxx/**/bar/", "foo/xxx/b/c/bar/", true},
-        new Object[]{"foo/**/xxx/**/bar/", "foo/a/xxx/c/bar/", true},
-        new Object[]{"foo/**/xxx/**/bar/", "foo/a/c/xxx/bar/", true},
-        new Object[]{"foo/**/xxx/**/bar/", "foo/bar/xxx/", false},
-        new Object[]{"foo/**/xxx/**/bar/", "foo/bar/xxx/bar/", true},
-        new Object[]{"foo/**/xxx/**/bar/", "foo/bar/xxx/xxx/bar/", true},
+        new Object[]{"foo/**/bar/a/", "foo/bar/b/bar/a/", true, true},
+        new Object[]{"foo/**/bar/a/", "foo/bar/bar/bar/a/", true, true},
+        new Object[]{"foo/**/bar/a/", "foo/bar/bar/b/a/", false, false},
+        new Object[]{"foo/**/bar/", "foo/bar/", true, true},
+        new Object[]{"foo/**/bar/", "bar/", null, null},
+        new Object[]{"foo/**/bar/", "foo/a/bar/", true, true},
+        new Object[]{"foo/**/bar/", "foo/a/b/bar/", true, true},
+        new Object[]{"foo/*/**/*/bar/", "foo/a/bar/", false, false},
+        new Object[]{"foo/*/**/*/bar/", "foo/a/b/bar/", true, true},
+        new Object[]{"foo/*/**/*/bar/", "foo/a/b/c/bar/", true, true},
+        new Object[]{"foo/**/xxx/**/bar/", "foo/xxx/bar/", true, true},
+        new Object[]{"foo/**/xxx/**/bar/", "foo/xxx/b/c/bar/", true, true},
+        new Object[]{"foo/**/xxx/**/bar/", "foo/a/xxx/c/bar/", true, true},
+        new Object[]{"foo/**/xxx/**/bar/", "foo/a/c/xxx/bar/", true, true},
+        new Object[]{"foo/**/xxx/**/bar/", "foo/bar/xxx/", false, false},
+        new Object[]{"foo/**/xxx/**/bar/", "foo/bar/xxx/bar/", true, true},
+        new Object[]{"foo/**/xxx/**/bar/", "foo/bar/xxx/xxx/bar/", true, true},
     };
   }
 
   @Test(dataProvider = "pathMatcherData")
-  public static void pathMatcherTest(@NotNull String pattern, @NotNull String path, @Nullable Boolean expectedMatch) throws InvalidPatternException {
-    PathMatcher matcher = WildcardHelper.createMatcher(pattern, false);
+  public static void nativeMatcherExactTest(@NotNull String pattern, @NotNull String path, @Nullable Boolean ignored, @Nullable Boolean expectedMatch) throws InvalidPatternException, IOException, InterruptedException {
+    Path temp = Files.createTempDirectory("git-matcher");
+    try {
+      if (new ProcessBuilder()
+          .directory(temp.toFile())
+          .command("git", "init", ".")
+          .start()
+          .waitFor() != 0) {
+        throw new SkipException("Can't find git");
+      }
+      Files.write(temp.resolve(".gitattributes"), (pattern + " test\n").getBytes(StandardCharsets.UTF_8));
+      byte[] output = ByteStreams.toByteArray(
+          new ProcessBuilder()
+              .directory(temp.toFile())
+              .command("git", "check-attr", "-a", "--", path)
+              .start()
+              .getInputStream()
+      );
+      Assert.assertEquals(output.length > 0, expectedMatch == Boolean.TRUE);
+    } finally {
+      Files.walkFileTree(temp, new DeleteTreeVisitor());
+    }
+  }
+
+  @Test(dataProvider = "pathMatcherData")
+  public static void pathMatcherPrefixTest(@NotNull String pattern, @NotNull String path, @Nullable Boolean expectedMatch, @Nullable Boolean ignored) throws InvalidPatternException {
+    pathMatcherCheck(pattern, path, false, expectedMatch);
+  }
+
+  @Test(dataProvider = "pathMatcherData")
+  public static void pathMatcherExactTest(@NotNull String pattern, @NotNull String path, @Nullable Boolean ignored, @Nullable Boolean expectedMatch) throws InvalidPatternException {
+    pathMatcherCheck(pattern, path, true, expectedMatch);
+  }
+
+  private static void pathMatcherCheck(@NotNull String pattern, @NotNull String path, boolean exact, @Nullable Boolean expectedMatch) throws InvalidPatternException {
+    PathMatcher matcher = WildcardHelper.createMatcher(pattern, exact);
     for (String name : WildcardHelper.splitPattern(path)) {
       if (matcher == null) break;
       boolean isDir = name.endsWith("/");

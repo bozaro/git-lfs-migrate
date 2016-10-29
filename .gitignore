@@ -1,3 +1,4 @@
+*.orig
 *.class
 *.local
 *.mapdb*
