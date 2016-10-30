@@ -42,12 +42,12 @@ public class WildcardTest {
     return new Object[][]{
         // Simple mask
         new Object[]{"/", new String[0]},
-        new Object[]{"*/", new String[]{"*/"}},
+        new Object[]{"*/", new String[]{"*/", "**/"}},
         new Object[]{"*", new String[]{"**/", "*"}},
         new Object[]{"**", new String[]{"**/", "*"}},
-        new Object[]{"**/", new String[]{}},
+        new Object[]{"**/", new String[]{"**/"}},
         new Object[]{"foo", new String[]{"**/", "foo"}},
-        new Object[]{"foo/", new String[]{"foo/"}},
+        new Object[]{"foo/", new String[]{"**/", "foo/"}},
         new Object[]{"/foo", new String[]{"foo"}},
 
         // Convert path file mask
@@ -70,9 +70,9 @@ public class WildcardTest {
         new Object[]{"foo/**", new String[]{"foo/", "**/", "*"}},
         new Object[]{"foo/**/*", new String[]{"foo/", "**/", "*"}},
         new Object[]{"foo/**/*/*", new String[]{"foo/", "*/", "**/", "*"}},
-        new Object[]{"foo/**/", new String[]{"foo/"}},
-        new Object[]{"foo/**/*/", new String[]{"foo/", "*/"}},
-        new Object[]{"foo/**/*/*/", new String[]{"foo/", "*/", "*/"}},
+        new Object[]{"foo/**/", new String[]{"foo/", "**/"}},
+        new Object[]{"foo/**/*/", new String[]{"foo/", "*/", "**/"}},
+        new Object[]{"foo/**/*/*/", new String[]{"foo/", "*/", "*/", "**/"}},
     };
   }
 
@@ -112,8 +112,8 @@ public class WildcardTest {
         new Object[]{"/bar", "foo/bar", null, null},
         new Object[]{"bar/", "foo/bar", null, null},
         new Object[]{"b*r/", "foo/bar", null, null},
-        new Object[]{"bar/", "foo/bar/", null, true},
-        new Object[]{"b*r/", "foo/bar/", null, true},
+        new Object[]{"bar/", "foo/bar/", true, true},
+        new Object[]{"b*r/", "foo/bar/", true, true},
         new Object[]{"b[a-z]r", "foo/bar", true, true},
         new Object[]{"b[a-z]r", "foo/b0r", null, null},
         new Object[]{"b[a-z]r", "foo/b0r/", false, false},

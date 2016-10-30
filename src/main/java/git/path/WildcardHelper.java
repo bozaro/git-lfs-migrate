@@ -129,7 +129,7 @@ public class WildcardHelper {
   @NotNull
   public static List<String> normalizePattern(@NotNull List<String> tokens) {
     // By default without slashes using mask for files in all subdirectories
-    if (tokens.size() == 1 && !tokens.get(0).contains("/")) {
+    if ((tokens.size() == 1) && !tokens.get(0).startsWith("/")) {
       tokens.add(0, "**/");
     }
     // Normalized pattern always starts with "/"
@@ -164,15 +164,6 @@ public class WildcardHelper {
         continue;
       }
       index++;
-    }
-    // Remove tailing "**/" and "*"
-    while (!tokens.isEmpty()) {
-      final String token = tokens.get(tokens.size() - 1);
-      if (token.equals("**/")) {
-        tokens.remove(tokens.size() - 1);
-      } else {
-        break;
-      }
     }
     return tokens;
   }

@@ -42,15 +42,22 @@ public final class RecursivePathMatcher implements PathMatcher {
       if (index < nameMatchers.length && nameMatchers[index].isMatch(name, isDir)) {
         if (nameMatchers[index].isRecursive()) {
           childs[count++] = index;
-          if (nameMatchers[index + 1].isMatch(name, isDir)) {
+          if (index + 1 == nameMatchers.length) {
+            if (!exact) {
+              return AlwaysMatcher.INSTANCE;
+            }
+            if (isDir) {
+              childs[count++] = index + 1;
+            }
+          } else if (nameMatchers[index + 1].isMatch(name, isDir)) {
             if (index + 2 == nameMatchers.length) {
               if (!exact || !isDir) {
                 return AlwaysMatcher.INSTANCE;
               }
             }
             childs[count++] = index + 2;
-            changed = true;
           }
+          changed = true;
         } else {
           if (index + 1 == nameMatchers.length) {
             if (!exact || !isDir) {
