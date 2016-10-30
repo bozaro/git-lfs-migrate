@@ -1,5 +1,7 @@
 package git.lfs.migrate;
 
+import git.path.PathMatcher;
+import git.path.WildcardHelper;
 import org.apache.commons.codec.binary.Hex;
 import org.eclipse.jgit.errors.InvalidPatternException;
 import org.eclipse.jgit.fnmatch.FileNameMatcher;
@@ -9,8 +11,9 @@ import org.eclipse.jgit.treewalk.CanonicalTreeParser;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.mapdb.DB;
-import org.mapdb.DBMaker;
 import org.mapdb.HTreeMap;
+import org.mapdb.Serializer;
+import org.mapdb.serializer.SerializerJava;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.bozaro.gitlfs.common.data.Meta;
@@ -18,6 +21,9 @@ import ru.bozaro.gitlfs.pointer.Pointer;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
@@ -27,7 +33,7 @@ import java.util.stream.Collectors;
  * Converter for git objects.
  * Created by bozaro on 09.06.15.
  */
-public class GitConverter implements AutoCloseable {
+public class GitConverter {
   @NotNull
   private static final Logger log = LoggerFactory.getLogger(GitConverter.class);
   @NotNull
@@ -35,37 +41,34 @@ public class GitConverter implements AutoCloseable {
   @NotNull
   private final String[] globs;
   @NotNull
-  private final File basePath;
-  @NotNull
-  private final File tempPath;
+  private final PathMatcher[] matchers;
   @NotNull
   private final DB cache;
   @NotNull
+  private final Path basePath;
+  @NotNull
+  private final Path tempPath;
+  @NotNull
   private final HTreeMap<String, MetaData> cacheMeta;
 
-  public GitConverter(@NotNull File cachePath, @NotNull File basePath, @NotNull String[] globs) throws IOException, InvalidPatternException {
+  public GitConverter(@NotNull DB cache, @NotNull Path basePath, @NotNull String[] globs) throws IOException, InvalidPatternException {
     this.basePath = basePath;
+    this.cache = cache;
     this.globs = globs.clone();
+    this.matchers = convertGlobs(globs);
     Arrays.sort(globs);
 
     for (String glob : globs) {
       new FileNameMatcher(glob, '/');
     }
 
-    tempPath = new File(basePath, "lfs/tmp");
-    makeParentDirs(tempPath);
-    makeParentDirs(cachePath);
-    cache = DBMaker.newFileDB(new File(cachePath, "git-lfs-migrate.mapdb"))
-        .asyncWriteEnable()
-        .mmapFileEnable()
-        .cacheSoftRefEnable()
-        .make();
-    cacheMeta = cache.getHashMap("meta");
-  }
-
-  @Override
-  public void close() throws IOException {
-    cache.close();
+    tempPath = basePath.resolve("lfs/tmp");
+    Files.createDirectories(tempPath);
+    //noinspection unchecked
+    cacheMeta = cache.<String, MetaData>hashMap("meta")
+        .keySerializer(Serializer.STRING)
+        .valueSerializer(new SerializerJava())
+        .createOrOpen();
   }
 
   @NotNull
@@ -231,22 +234,29 @@ public class GitConverter implements AutoCloseable {
     };
   }
 
-  private boolean matchFilename(@NotNull String fileName) {
+  @NotNull
+  private static PathMatcher[] convertGlobs(String[] globs) throws InvalidPatternException {
+    final PathMatcher[] matchers = new PathMatcher[globs.length];
+    for (int i = 0; i < globs.length; ++i) {
+      String glob = globs[i];
+      if (!glob.contains("/")) {
+        glob = "**/" + glob;
+      }
+      matchers[i] = WildcardHelper.createMatcher(glob, true);
+    }
+    return matchers;
+  }
+
+  public boolean matchFilename(@NotNull String fileName) {
     if (!fileName.startsWith("/")) {
       throw new IllegalStateException("Unexpected file name: " + fileName);
     }
-    try {
-      for (String glob : globs) {
-        final FileNameMatcher matcher = new FileNameMatcher(glob, null);
-        matcher.append(fileName.substring(1));
-        if (matcher.isMatch()) {
-          return true;
-        }
+    for (PathMatcher matcher : matchers) {
+      if (WildcardHelper.isMatch(matcher, fileName)) {
+        return true;
       }
-      return false;
-    } catch (InvalidPatternException e) {
-      throw new IllegalArgumentException(e);
     }
+    return false;
   }
 
   @NotNull
@@ -320,11 +330,11 @@ public class GitConverter implements AutoCloseable {
   @NotNull
   private String createLocalFile(@NotNull ObjectId id, @NotNull ObjectLoader loader) throws IOException {
     // Create LFS stream.
-    final File tmpFile = new File(tempPath, UUID.randomUUID().toString());
+    final Path tmpFile = tempPath.resolve(UUID.randomUUID().toString());
     final MessageDigest md = createSha256();
     int size = 0;
     try (InputStream istream = loader.openStream();
-         OutputStream ostream = new FileOutputStream(tmpFile)) {
+         OutputStream ostream = Files.newOutputStream(tmpFile)) {
       byte[] buffer = new byte[0x10000];
       while (true) {
         int read = istream.read(buffer);
@@ -338,22 +348,18 @@ public class GitConverter implements AutoCloseable {
     cacheMeta.putIfAbsent(id.name(), new MetaData(hash, size));
     cache.commit();
     // Rename file.
-    final File lfsFile = new File(basePath, "lfs/objects/" + hash.substring(0, 2) + "/" + hash.substring(2, 4) + "/" + hash);
-    makeParentDirs(lfsFile.getParentFile());
-    if (lfsFile.exists()) {
-      if (!tmpFile.delete()) {
-        log.warn("Can't delete temporary file: {}", lfsFile.getAbsolutePath());
+    final Path lfsFile = basePath.resolve("lfs/objects/" + hash.substring(0, 2) + "/" + hash.substring(2, 4) + "/" + hash);
+    Files.createDirectories(lfsFile.getParent());
+    if (Files.exists(lfsFile)) {
+      try {
+        Files.delete(tmpFile);
+      } catch (IOException e) {
+        log.warn("Can't delete temporary file: {}", lfsFile.toAbsolutePath());
       }
-    } else if (!tmpFile.renameTo(lfsFile)) {
-      throw new IOException("Can't rename file: " + tmpFile + " -> " + lfsFile);
+    } else {
+      Files.move(tmpFile, lfsFile, StandardCopyOption.ATOMIC_MOVE);
     }
     return hash;
-  }
-
-  private void makeParentDirs(@NotNull File path) throws IOException {
-    if (!path.mkdirs() && !path.exists()) {
-      throw new IOException("Can't create directory: " + path.getAbsolutePath());
-    }
   }
 
   @NotNull

@@ -1,5 +1,9 @@
 # Changes
 
+## 0.2.4
+
+ * Fix non-suffix pattern matching (#20, thanks to @wesyq).
+
 ## 0.2.3
 
  * Allow load globs from file (#19, thanks to @leth).
