@@ -438,6 +438,7 @@ public class GitConverter {
   }
 
   public enum TaskType {
+    EndMark(false),
     Simple(true),
     Attribute(false),
     UploadLfs(false);

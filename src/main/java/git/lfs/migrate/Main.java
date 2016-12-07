@@ -11,8 +11,6 @@ import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.jgrapht.graph.DefaultEdge;
-import org.jgrapht.graph.SimpleDirectedGraph;
 import org.mapdb.DB;
 import org.mapdb.DBMaker;
 import org.slf4j.Logger;
@@ -162,23 +160,12 @@ public class Main {
       final GitConverter converter = new GitConverter(cache, dstPath, globs);
       dstRepo.create(true);
       // Load all revision list.
-      log.info("Reading full objects list...");
-      final SimpleDirectedGraph<TaskKey, DefaultEdge> graph = loadTaskGraph(converter, srcRepo);
-      final int totalObjects = graph.vertexSet().size();
-      log.info("Found objects: {}", totalObjects);
-
-      final ConcurrentMap<TaskKey, ObjectId> converted = new ConcurrentHashMap<>();
-      log.info("Converting object without dependencies in " + writeThreads + " threads...", totalObjects);
+      ConcurrentMap<TaskKey, ObjectId> converted = new ConcurrentHashMap<>();
       try (HttpUploader uploader = createHttpUploader(srcRepo, client, uploadThreads)) {
-        processMultipleThreads(converter, graph, srcRepo, dstRepo, converted, uploader, writeThreads);
-      }
-
-      log.info("Converting graph in single thread...");
-      processSingleThread(converter, graph, srcRepo, dstRepo, converted);
-
-      // Validate result
-      if (converted.size() != totalObjects) {
-        throw new IllegalStateException();
+        log.info("Converting object without dependencies in " + writeThreads + " threads...");
+        Deque<TaskKey> pass2 = processWithoutDependencies(converter, srcRepo, dstRepo, converted, uploader, writeThreads);
+        log.info("Converting object with dependencies in single thread...");
+        processSingleThread(converter, srcRepo, dstRepo, converted, uploader, pass2);
       }
 
       log.info("Recreating refs...");
@@ -201,81 +188,28 @@ public class Main {
     return client == null ? null : new HttpUploader(repository, client, uploadThreads);
   }
 
-  private static void processMultipleThreads(@NotNull GitConverter converter, @NotNull SimpleDirectedGraph<TaskKey, DefaultEdge> graph, @NotNull Repository srcRepo, @NotNull Repository dstRepo, @NotNull ConcurrentMap<TaskKey, ObjectId> converted, @Nullable HttpUploader uploader, int threads) throws IOException, InterruptedException {
-    final Deque<TaskKey> queue = new ConcurrentLinkedDeque<>();
-    for (TaskKey vertex : graph.vertexSet()) {
-      if (graph.outgoingEdgesOf(vertex).isEmpty()) {
-        queue.add(vertex);
-      }
-    }
-    graph.removeAllVertices(queue);
-    final ExecutorService pool = Executors.newFixedThreadPool(threads);
-    try (ProgressReporter reporter = new ProgressReporter("processed", queue.size(), uploader)) {
-      final AtomicBoolean done = new AtomicBoolean(false);
-      final List<Future<?>> jobs = new ArrayList<>(threads);
-      for (int i = 0; i < threads; ++i) {
-        jobs.add(pool.submit(() -> {
-          try {
-            final ObjectInserter inserter = dstRepo.newObjectInserter();
-            final ObjectReader reader = srcRepo.newObjectReader();
-            while (!done.get()) {
-              final TaskKey taskKey = queue.poll();
-              if (taskKey == null) break;
-              final ObjectId objectId = converter.convertTask(reader, taskKey).convert(inserter, converted::get, uploader);
-              converted.put(taskKey, objectId);
-              reporter.increment();
-            }
-            inserter.flush();
-          } catch (IOException e) {
-            rethrow(e);
-          } finally {
-            done.set(true);
-          }
-        }));
-      }
-      for (Future<?> job : jobs) {
-        try {
-          job.get();
-        } catch (ExecutionException e) {
-          rethrow(e.getCause());
-        }
-      }
-    } finally {
-      pool.shutdown();
-    }
-  }
-
-  private static void processSingleThread(@NotNull GitConverter converter, @NotNull SimpleDirectedGraph<TaskKey, DefaultEdge> graph, @NotNull Repository srcRepo, @NotNull Repository dstRepo, @NotNull Map<TaskKey, ObjectId> converted) throws IOException {
-    try (ProgressReporter reporter = new ProgressReporter("completed", graph.vertexSet().size(), null)) {
-      final Deque<TaskKey> queue = new ArrayDeque<>();
-      for (TaskKey vertex : graph.vertexSet()) {
-        if (graph.outgoingEdgesOf(vertex).isEmpty()) {
-          queue.add(vertex);
-        }
-      }
+  private static void processSingleThread(@NotNull GitConverter converter, @NotNull Repository srcRepo, @NotNull Repository dstRepo, @NotNull Map<TaskKey, ObjectId> converted, @Nullable HttpUploader uploader, @NotNull Deque<TaskKey> queue) throws IOException {
+    try (ProgressReporter reporter = new ProgressReporter("processed", new AtomicLong(queue.size()), null)) {
       final ObjectInserter inserter = dstRepo.newObjectInserter();
       final ObjectReader reader = srcRepo.newObjectReader();
       while (!queue.isEmpty()) {
         final TaskKey taskKey = queue.pop();
-        final ObjectId objectId = converter.convertTask(reader, taskKey).convert(inserter, converted::get, (oid, meta) -> {
-          throw new UnsupportedOperationException("Not supported on this repository convert stage");
-        });
-        converted.put(taskKey, objectId);
-
-        final List<TaskKey> sources = new ArrayList<>();
-        for (DefaultEdge edge : graph.incomingEdgesOf(taskKey)) {
-          sources.add(graph.getEdgeSource(edge));
-        }
-
-        graph.removeVertex(taskKey);
-        for (TaskKey source : sources) {
-          if (graph.outgoingEdgesOf(source).isEmpty()) {
-            queue.add(source);
+        if (!converted.containsKey(taskKey)) {
+          boolean taskReady = true;
+          for (TaskKey depend : converter.convertTask(reader, taskKey).depends()) {
+            if (!converted.containsKey(depend)) {
+              queue.add(taskKey);
+              taskReady = false;
+              break;
+            }
+          }
+          if (taskReady) {
+            final ObjectId objectId = converter.convertTask(reader, taskKey).convert(inserter, converted::get, uploader);
+            converted.put(taskKey, objectId);
+            reporter.increment();
           }
         }
-        reporter.increment();
       }
-      inserter.flush();
     }
   }
 
@@ -297,31 +231,77 @@ public class Main {
     }
   }
 
-  private static SimpleDirectedGraph<TaskKey, DefaultEdge> loadTaskGraph(@NotNull GitConverter converter, @NotNull Repository repository) throws IOException {
-    try (ProgressReporter reporter = new ProgressReporter("found", -1, null)) {
-      final Map<String, Ref> refs = repository.getAllRefs();
-      final SimpleDirectedGraph<TaskKey, DefaultEdge> graph = new SimpleDirectedGraph<>(DefaultEdge.class);
+  @NotNull
+  private static Deque<TaskKey> processWithoutDependencies(@NotNull GitConverter converter, @NotNull Repository srcRepo, @NotNull Repository dstRepo, @NotNull ConcurrentMap<TaskKey, ObjectId> converted, @Nullable HttpUploader uploader, int threads) throws IOException, InterruptedException {
+    AtomicLong total = new AtomicLong(0);
+    try (ProgressReporter reporter = new ProgressReporter("processed", total, null)) {
+      final Set<TaskKey> checked = new HashSet<>();
+      final Deque<TaskKey> pass2 = new ArrayDeque<>();
       final Deque<TaskKey> queue = new ArrayDeque<>();
       // Heads
-      for (Ref ref : refs.values()) {
+      for (Ref ref : srcRepo.getAllRefs().values()) {
         final TaskKey taskKey = new TaskKey(GitConverter.TaskType.Simple, "", ref.getObjectId());
-        if (graph.addVertex(taskKey)) {
+        if (checked.add(taskKey)) {
           queue.add(taskKey);
-          reporter.increment();
         }
       }
-      final ObjectReader reader = repository.newObjectReader();
-      while (!queue.isEmpty()) {
-        final TaskKey taskKey = queue.pop();
-        for (TaskKey depend : converter.convertTask(reader, taskKey).depends()) {
-          if (graph.addVertex(depend)) {
-            queue.add(depend);
-            reporter.increment();
+
+      final ExecutorService pool = Executors.newFixedThreadPool(threads);
+      try {
+        final AtomicBoolean done = new AtomicBoolean(false);
+        final List<Future<?>> jobs = new ArrayList<>(threads);
+        final BlockingQueue<TaskKey> channel = new LinkedBlockingQueue<>();
+        for (int i = 0; i < threads; ++i) {
+          jobs.add(pool.submit(() -> {
+            try {
+              final ObjectInserter inserter = dstRepo.newObjectInserter();
+              final ObjectReader reader = srcRepo.newObjectReader();
+              while (!done.get()) {
+                final TaskKey taskKey = channel.take();
+                if (taskKey.getType() == GitConverter.TaskType.EndMark) break;
+                final ObjectId objectId = converter.convertTask(reader, taskKey).convert(inserter, converted::get, uploader);
+                converted.put(taskKey, objectId);
+                reporter.increment();
+              }
+              inserter.flush();
+            } catch (IOException | InterruptedException e) {
+              rethrow(e);
+            } finally {
+              done.set(true);
+            }
+          }));
+        }
+        final ObjectReader reader = srcRepo.newObjectReader();
+        while (!queue.isEmpty()) {
+          final TaskKey taskKey = queue.pop();
+          boolean withoutDepends = true;
+          for (TaskKey depend : converter.convertTask(reader, taskKey).depends()) {
+            withoutDepends = false;
+            if (checked.add(depend)) {
+              queue.add(depend);
+            }
           }
-          graph.addEdge(taskKey, depend);
+          if (withoutDepends) {
+            total.incrementAndGet();
+            channel.add(taskKey);
+          } else {
+            pass2.add(taskKey);
+          }
         }
+        for (Future<?> ignored : jobs) {
+          channel.add(new TaskKey(GitConverter.TaskType.EndMark, null, ObjectId.zeroId()));
+        }
+        for (Future<?> job : jobs) {
+          try {
+            job.get();
+          } catch (ExecutionException e) {
+            rethrow(e.getCause());
+          }
+        }
+      } finally {
+        pool.shutdown();
       }
-      return graph;
+      return pass2;
     }
   }
 
@@ -390,7 +370,8 @@ public class Main {
 
   public static class ProgressReporter implements AutoCloseable {
     private static final long DELAY = TimeUnit.SECONDS.toMillis(1);
-    private final long total;
+    @Nullable
+    private final AtomicLong total;
     @NotNull
     private final AtomicLong current = new AtomicLong(0);
     @NotNull
@@ -400,7 +381,7 @@ public class Main {
     @Nullable
     private final HttpUploader uploader;
 
-    public ProgressReporter(@NotNull String prefix, long total, @Nullable HttpUploader uploader) {
+    public ProgressReporter(@NotNull String prefix, @Nullable AtomicLong total, @Nullable HttpUploader uploader) {
       this.prefix = prefix;
       this.total = total;
       this.uploader = uploader;
@@ -423,7 +404,7 @@ public class Main {
     }
 
     private void print(long current) {
-      String message = "  " + prefix + ": " + current + (total >= 0 ? "/" + total : "");
+      String message = "  " + prefix + ": " + current + (total != null ? "/" + total.get() : "");
       if (uploader != null) {
         message += ", uploaded: " + uploader.getFinished() + "/" + uploader.getTotal();
       }
