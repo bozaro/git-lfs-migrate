@@ -72,8 +72,8 @@ After that you with have:
  * All *.md and *.jar in this repository will stored in LFS storage
  * All revisions on this repository will have modified or created .gitattributes file with new lines like:<br/>
 ```
-*.md    filter=lfs diff=lfs merge=lfs -crlf
-*.jar   filter=lfs diff=lfs merge=lfs -crlf
+*.md    filter=lfs diff=lfs merge=lfs -text
+*.jar   filter=lfs diff=lfs merge=lfs -text
 ```
 
 Supported Git url formats:

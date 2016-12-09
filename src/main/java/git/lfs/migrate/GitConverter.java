@@ -391,7 +391,7 @@ public class GitConverter {
       public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final Set<String> attributes = new TreeSet<>();
         for (String glob : globs) {
-          attributes.add(glob + "\tfilter=lfs diff=lfs merge=lfs -crlf");
+          attributes.add(glob + "\tfilter=lfs diff=lfs merge=lfs -text");
         }
         final ByteArrayOutputStream blob = new ByteArrayOutputStream();
         try (BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(openAttributes(reader, id), StandardCharsets.UTF_8))) {

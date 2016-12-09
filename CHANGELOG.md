@@ -3,6 +3,7 @@
 ## 0.2.5
 
  * Dramatically reduce memory usage (#26)
+ * Replace `-crlf` by `-text` .gitattributes (#25, thanks to @leth).
 
 ## 0.2.4
 
