@@ -156,6 +156,7 @@ public class Main {
 
     try (DB cache = DBMaker.fileDB(cachePath.resolve("git-lfs-migrate.mapdb").toFile())
         .fileMmapEnableIfSupported()
+        .checksumHeaderBypass()
         .make()) {
       final GitConverter converter = new GitConverter(cache, dstPath, globs);
       dstRepo.create(true);
@@ -204,7 +205,7 @@ public class Main {
             }
           }
           if (taskReady) {
-            final ObjectId objectId = converter.convertTask(reader, taskKey).convert(inserter, converted::get, uploader);
+            final ObjectId objectId = converter.convertTask(reader, taskKey).convert(dstRepo, inserter, converted::get, uploader);
             converted.put(taskKey, objectId);
             reporter.increment();
           }
@@ -259,7 +260,7 @@ public class Main {
               while (!done.get()) {
                 final TaskKey taskKey = channel.take();
                 if (taskKey.getType() == GitConverter.TaskType.EndMark) break;
-                final ObjectId objectId = converter.convertTask(reader, taskKey).convert(inserter, converted::get, uploader);
+                final ObjectId objectId = converter.convertTask(reader, taskKey).convert(dstRepo, inserter, converted::get, uploader);
                 converted.put(taskKey, objectId);
                 reporter.increment();
               }

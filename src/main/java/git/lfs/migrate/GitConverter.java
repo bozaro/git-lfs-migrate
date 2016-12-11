@@ -112,7 +112,7 @@ public class GitConverter {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
+      public ObjectId convert(@NotNull Repository dstRepo, @NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         return objectId;
       }
     };
@@ -131,7 +131,7 @@ public class GitConverter {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
+      public ObjectId convert(@NotNull Repository dstRepo, @NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final ObjectId id = resolver.resolve(TaskType.Simple, "", revObject.getObject());
         final TagBuilder builder = new TagBuilder();
         builder.setMessage(revObject.getFullMessage());
@@ -159,7 +159,7 @@ public class GitConverter {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
+      public ObjectId convert(@NotNull Repository dstRepo, @NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final CommitBuilder builder = new CommitBuilder();
         builder.setAuthor(revObject.getAuthorIdent());
         builder.setCommitter(revObject.getCommitterIdent());
@@ -220,7 +220,7 @@ public class GitConverter {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
+      public ObjectId convert(@NotNull Repository dstRepo, @NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final List<GitTreeEntry> entries = getEntries();
         // Create new tree.
         Collections.sort(entries);
@@ -270,14 +270,16 @@ public class GitConverter {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
+      public ObjectId convert(@NotNull Repository dstRepo, @NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final ObjectLoader loader = reader.open(id, Constants.OBJ_BLOB);
         // Is empty blob (see #21)?
         if (loader.getSize() == 0) {
+          if (dstRepo.hasObject(id)) return id;
           return copy(inserter, loader);
         }
         // Is object already converted?
         if (isLfsPointer(loader)) {
+          if (dstRepo.hasObject(id)) return id;
           return copy(inserter, loader);
         }
         final String hash = (uploader == null) ? createLocalFile(id, loader) : createRemoteFile(id, loader, uploader);
@@ -388,7 +390,7 @@ public class GitConverter {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
+      public ObjectId convert(@NotNull Repository dstRepo, @NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final Set<String> attributes = new TreeSet<>();
         for (String glob : globs) {
           attributes.add(glob + "\tfilter=lfs diff=lfs merge=lfs -text");
@@ -423,7 +425,8 @@ public class GitConverter {
 
       @NotNull
       @Override
-      public ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
+      public ObjectId convert(@NotNull Repository dstRepo, @NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
+        if (dstRepo.hasObject(id)) return id;
         return copy(inserter, reader.open(id));
       }
     };
@@ -469,7 +472,7 @@ public class GitConverter {
     Iterable<TaskKey> depends() throws IOException;
 
     @NotNull
-    ObjectId convert(@NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException;
+    ObjectId convert(@NotNull Repository dstRepo, @NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException;
   }
 
   @FunctionalInterface
