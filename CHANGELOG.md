@@ -4,6 +4,7 @@
 
  * Dramatically reduce memory usage (#26, thanks to @mmv, @wesyq).
  * Replace `-crlf` by `-text` .gitattributes (#25, thanks to @leth).
+ * JFrog Artifactory git-lfs compatibility (#23, thanks to @dbiner, @SeaOfCowards).
 
 ## 0.2.4
 
