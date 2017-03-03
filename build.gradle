@@ -26,6 +26,7 @@ dependencies {
   compile "org.eclipse.jgit:org.eclipse.jgit:4.5.0.201609210915-r"
   compile "org.mapdb:mapdb:3.0.2"
   compile "org.slf4j:slf4j-simple:1.7.21"
+  compile "org.jgrapht:jgrapht-core:1.0.0"
   compile "com.beust:jcommander:1.58"
 
   compile "ru.bozaro.gitlfs:gitlfs-pointer:0.11.0"
