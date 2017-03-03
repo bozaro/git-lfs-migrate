@@ -81,7 +81,7 @@ public class Main {
       ).toArray(String[]::new);
     }
     try {
-      processRepository(cmd.src, cmd.dst, cmd.cache, client, cmd.writeThreads, cmd.uploadThreads, globs);
+      processRepository(cmd.src, cmd.dst, cmd.cache, client, cmd.writeThreads, cmd.uploadThreads, cmd.annotateIdPrefix, globs);
     } catch (ExecutionException e) {
       if (e.getCause() instanceof RequestException) {
         final RequestException cause = (RequestException) e.getCause();
@@ -143,7 +143,7 @@ public class Main {
     return false;
   }
 
-  public static void processRepository(@NotNull Path srcPath, @NotNull Path dstPath, @NotNull Path cachePath, @Nullable Client client, int writeThreads, int uploadThreads, @NotNull String... globs) throws IOException, InterruptedException, ExecutionException, InvalidPatternException {
+  public static void processRepository(@NotNull Path srcPath, @NotNull Path dstPath, @NotNull Path cachePath, @Nullable Client client, int writeThreads, int uploadThreads, @Nullable String annotateIdPrefix, @NotNull String... globs) throws IOException, InterruptedException, ExecutionException, InvalidPatternException {
     removeDirectory(dstPath);
     Files.createDirectories(dstPath);
 
@@ -158,7 +158,7 @@ public class Main {
         .fileMmapEnableIfSupported()
         .checksumHeaderBypass()
         .make()) {
-      final GitConverter converter = new GitConverter(cache, dstPath, globs);
+      final GitConverter converter = new GitConverter(cache, dstPath, annotateIdPrefix, globs);
       dstRepo.create(true);
       // Load all revision list.
       ConcurrentMap<TaskKey, ObjectId> converted = new ConcurrentHashMap<>();
@@ -440,6 +440,8 @@ public class Main {
     private boolean noCheckCertificate = false;
     @Parameter(names = {"--glob-file"}, description = "File containing glob patterns")
     private Path globFile = null;
+    @Parameter(names = {"--annotate-id-prefix"}, description = "Use this prefix to add original ID to rewritten messages", required = false)
+    private String annotateIdPrefix;
 
     @Parameter(description = "LFS file glob patterns")
     @NotNull

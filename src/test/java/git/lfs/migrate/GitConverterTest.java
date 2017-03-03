@@ -47,7 +47,7 @@ public class GitConverterTest {
   @Test(dataProvider = "matchFilenameProvider")
   public void matchFilenameTest(@NotNull String path, boolean expected) throws IOException, InvalidPatternException {
     FileSystem fs = Jimfs.newFileSystem(Configuration.unix());
-    GitConverter converter = new GitConverter(DBMaker.memoryDB().make(), fs.getPath("/tmp/migrate"), new String[]{
+    GitConverter converter = new GitConverter(DBMaker.memoryDB().make(), fs.getPath("/tmp/migrate"), null, new String[]{
         "*.zip",
         ".*",
         "LICENSE",

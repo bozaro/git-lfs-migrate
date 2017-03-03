@@ -50,11 +50,13 @@ public class GitConverter {
   private final Path tempPath;
   @NotNull
   private final HTreeMap<String, MetaData> cacheMeta;
+  private final String annotateIdPrefix;
 
-  public GitConverter(@NotNull DB cache, @NotNull Path basePath, @NotNull String[] globs) throws IOException, InvalidPatternException {
+  public GitConverter(@NotNull DB cache, @NotNull Path basePath, @Nullable String annotateIdPrefix, @NotNull String[] globs) throws IOException, InvalidPatternException {
     this.basePath = basePath;
     this.cache = cache;
     this.globs = globs.clone();
+    this.annotateIdPrefix = annotateIdPrefix;
     this.matchers = convertGlobs(globs);
     Arrays.sort(globs);
 
@@ -80,7 +82,7 @@ public class GitConverter {
         }
         final RevObject revObject = new RevWalk(reader).parseAny(key.getObjectId());
         if (revObject instanceof RevCommit) {
-          return convertCommitTask((RevCommit) revObject);
+          return convertCommitTask((RevCommit) revObject, this.annotateIdPrefix);
         }
         if (revObject instanceof RevTree) {
           return convertTreeTask(reader, revObject, Objects.requireNonNull(key.getPath()));
@@ -89,7 +91,7 @@ public class GitConverter {
           return copyTask(reader, revObject);
         }
         if (revObject instanceof RevTag) {
-          return convertTagTask((RevTag) revObject);
+          return convertTagTask((RevTag) revObject, this.annotateIdPrefix);
         }
         throw new IllegalStateException("Unsupported object type: " + key + " (" + revObject.getClass().getName() + ")");
       }
@@ -100,6 +102,16 @@ public class GitConverter {
       default:
         throw new IllegalStateException("Unknwon task key type: " + key.getType());
     }
+  }
+
+  private String addIdAnnotation(String msg, RevObject revObject, String annotateIdPrefix) {
+	  if (annotateIdPrefix != null) {
+		  if (! msg.endsWith("\n")) {
+	            msg += "\n";
+          }
+          msg += "\n" + annotateIdPrefix + " " + revObject.getId().getName() + "\n";
+	  }
+	  return msg;
   }
 
   private ConvertTask keepMissingTask(@NotNull ObjectId objectId) {
@@ -119,7 +131,7 @@ public class GitConverter {
   }
 
   @NotNull
-  private ConvertTask convertTagTask(@NotNull RevTag revObject) throws IOException {
+  private ConvertTask convertTagTask(@NotNull RevTag revObject, String annotateIdPrefix) throws IOException {
     return new ConvertTask() {
       @NotNull
       @Override
@@ -134,7 +146,7 @@ public class GitConverter {
       public ObjectId convert(@NotNull Repository dstRepo, @NotNull ObjectInserter inserter, @NotNull ConvertResolver resolver, @Nullable Uploader uploader) throws IOException {
         final ObjectId id = resolver.resolve(TaskType.Simple, "", revObject.getObject());
         final TagBuilder builder = new TagBuilder();
-        builder.setMessage(revObject.getFullMessage());
+        builder.setMessage(addIdAnnotation(revObject.getFullMessage(), revObject, annotateIdPrefix));
         builder.setTag(revObject.getTagName());
         builder.setTagger(revObject.getTaggerIdent());
         builder.setObjectId(id, revObject.getObject().getType());
@@ -144,7 +156,7 @@ public class GitConverter {
   }
 
   @NotNull
-  private ConvertTask convertCommitTask(@NotNull RevCommit revObject) throws IOException {
+  private ConvertTask convertCommitTask(@NotNull RevCommit revObject, String annotateIdPrefix) throws IOException {
     return new ConvertTask() {
       @NotNull
       @Override
@@ -164,7 +176,7 @@ public class GitConverter {
         builder.setAuthor(revObject.getAuthorIdent());
         builder.setCommitter(revObject.getCommitterIdent());
         builder.setEncoding(revObject.getEncoding());
-        builder.setMessage(revObject.getFullMessage());
+        builder.setMessage(addIdAnnotation(revObject.getFullMessage(), revObject, annotateIdPrefix));
         // Set parents
         for (RevCommit oldParent : revObject.getParents()) {
           builder.addParentId(resolver.resolve(TaskType.Simple, "", oldParent));
